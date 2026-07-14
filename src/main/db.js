@@ -112,6 +112,7 @@ function migrate() {
   addCol('materials', 'mtime', 'REAL');
   addCol('materials', 'size', 'INTEGER');
   addCol('materials', 'seq', 'INTEGER'); // spine position from "01-", "Unit2", …
+  addCol('materials', 'last_opened_at', 'TEXT');
   // topic_edges gained the 'exam_cluster' kind; SQLite can't alter a CHECK, so
   // rebuild the table once if the old constraint is still in place.
   const ddl = get("SELECT sql FROM sqlite_master WHERE type='table' AND name='topic_edges'")?.sql || '';
@@ -275,6 +276,52 @@ const updateMaterial = (m) =>
     m.topic_id || null, m.path || '', m.type, m.title, m.due_at || null, m.id);
 const deleteMaterial = (id) => run('DELETE FROM materials WHERE id=?', id);
 const getMaterial = (id) => get('SELECT * FROM materials WHERE id=?', id);
+const touchMaterialOpened = (id) =>
+  run('UPDATE materials SET last_opened_at=? WHERE id=?', new Date().toISOString(), id);
+
+// Today's study log + resume list for the companion home screen.
+const listStudyToday = (date) => {
+  const sessions = all(`
+    SELECT s.started_at, s.duration_min, s.source,
+           m.id AS material_id, m.title AS material_title, m.path, m.type AS slot,
+           t.name AS section_name, t.id AS topic_id,
+           mo.id AS module_id, mo.code AS module_code, mo.color AS module_color,
+           'session' AS kind
+    FROM material_sessions s
+    JOIN materials m ON m.id = s.material_id
+    LEFT JOIN topics t ON t.id = m.topic_id
+    JOIN modules mo ON mo.id = m.module_id
+    WHERE date(s.started_at) = ?
+    ORDER BY s.started_at DESC`, date);
+  const blocks = all(`
+    SELECT (b.date || 'T' || printf('%02d:%02d:00', b.start_min / 60, b.start_min % 60)) AS started_at,
+           (b.end_min - b.start_min) AS duration_min, 'block' AS source,
+           m.id AS material_id, m.title AS material_title, m.path, m.type AS slot,
+           t.name AS section_name, t.id AS topic_id,
+           mo.id AS module_id, mo.code AS module_code, mo.color AS module_color,
+           'block' AS kind
+    FROM study_blocks b
+    LEFT JOIN materials m ON m.id = b.material_id
+    LEFT JOIN topics t ON t.id = b.topic_id
+    LEFT JOIN modules mo ON mo.id = t.module_id
+    WHERE b.date = ? AND b.status = 'done'
+    ORDER BY b.start_min DESC`, date);
+  return [...sessions, ...blocks].sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)));
+};
+
+const listResumeItems = (limit = 8) => all(`
+  SELECT m.id, m.title, m.path, m.type AS slot, m.last_opened_at,
+         t.id AS topic_id, t.name AS section_name, t.mastery,
+         mo.id AS module_id, mo.code AS module_code, mo.color AS module_color,
+         (SELECT COUNT(*) FROM problems p WHERE p.topic_id = t.id) AS problem_count,
+         (SELECT COUNT(*) FROM problems p WHERE p.topic_id = t.id AND p.status IN ('solved','reviewed')) AS solved_count,
+         (SELECT COALESCE(SUM(s.duration_min), 0) FROM material_sessions s WHERE s.material_id = m.id) AS total_min
+  FROM materials m
+  JOIN modules mo ON mo.id = m.module_id
+  LEFT JOIN topics t ON t.id = m.topic_id
+  WHERE m.last_opened_at IS NOT NULL
+  ORDER BY m.last_opened_at DESC
+  LIMIT ?`, limit);
 const searchMaterials = (q, moduleId) => {
   const like = `%${q}%`;
   return moduleId
@@ -456,7 +503,8 @@ module.exports = {
   listModules, createModule, updateModule, deleteModule,
   listTopics, createTopic, updateTopic, deleteTopic, mergeTopics,
   listProblemQueue,
-  listMaterials, getMaterial, createMaterial, updateMaterial, deleteMaterial, searchMaterials,
+  listMaterials, getMaterial, touchMaterialOpened, createMaterial, updateMaterial, deleteMaterial, searchMaterials,
+  listStudyToday, listResumeItems,
   listEdges, createEdge, deleteEdge,
   listDeadlines, createDeadline, updateDeadline, deleteDeadline,
   listBlocks, clearPlannedBlocks, createBlock, deleteBlock, setBlockStatus,

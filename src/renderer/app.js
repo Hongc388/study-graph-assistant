@@ -7,6 +7,23 @@ const fmtMin = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m
 const toMin = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; };
 const today = () => new Date().toISOString().slice(0, 10);
 
+function fmtAgo(iso) {
+  if (!iso) return '';
+  const min = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 48) return `${hr}h ago`;
+  return `${Math.floor(hr / 24)}d ago`;
+}
+
+function fmtClock(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 const MATERIAL_TYPES = ['lecture', 'assignment', 'exam-prep', 'paper', 'lab', 'cheatsheet', 'notes'];
 const SECTION_SLOTS = [
   ['lecture', 'Lecture notes'],
@@ -226,6 +243,7 @@ function renderTimerDisplay() {
 }
 
 async function openMaterial(materialId, title, path) {
+  if (materialId) api.materialsTouchOpen(materialId);
   let mode = 'none';
   if (path && !path.startsWith('http')) {
     const r = await api.materialsOpen(path);
@@ -457,15 +475,25 @@ function formDialog(title, fields, submitLabel = 'Save') {
   });
 }
 
-// ---------- Dashboard ----------
+// ---------- Dashboard (study companion home) ----------
 async function renderDashboard() {
   currentModuleId = null;
+  const date = today();
+  let resume = [];
+  let studyLog = [];
   const [mods, dls] = await Promise.all([api.modulesList(), api.deadlinesList()]);
+  try {
+    [resume, studyLog] = await Promise.all([api.studyResume(6), api.studyTodayLog(date)]);
+  } catch {
+    // Main process not restarted since study companion IPC was added — dashboard still loads.
+  }
   const now = Date.now();
   const soon = dls.filter(d => !d.done)
     .map(d => ({ ...d, days: Math.ceil((new Date(d.due_at).getTime() - now) / 86400000) }))
     .filter(d => d.days >= 0 && d.days <= 21)
     .sort((a, b) => a.days - b.days);
+  const todayMin = studyLog.reduce((n, e) => n + (e.duration_min || 0), 0);
+
   view.innerHTML = `
     ${soon.length ? `<div class="panel exam-banner" style="border-color:var(--danger); margin-bottom:14px">
       <b style="color:var(--danger)">Exam countdown</b>
@@ -474,10 +502,56 @@ async function renderDashboard() {
           <span class="dot" style="background:${esc(d.module_color)}"></span>
           ${esc(d.module_code)} · ${esc(d.title)} · <b>${d.days}d</b></span>`).join('')}
       </div>
-      <p class="muted" style="margin:8px 0 0">Problem queue prioritizes unsolved work in these modules for the next 14 days.</p>
     </div>` : ''}
-    <div class="row" style="justify-content:space-between">
-      <h2>Modules</h2>
+
+    <div class="row" style="justify-content:space-between; align-items:baseline">
+      <h2>Study companion</h2>
+      <span class="muted">Today · <b class="mono">${(todayMin / 60).toFixed(1)}h</b> logged</span>
+    </div>
+    <p id="study-restart-hint" class="muted" style="display:none; margin:0 0 10px; color:var(--danger)">
+      Restart the app (Cmd+Q, then <span class="mono">npm start</span>) to enable today's log and resume.
+    </p>
+
+    <h3 style="margin-top:14px">Continue where you left off</h3>
+    ${resume.length ? `<div class="resume-grid">
+      ${resume.map(r => `<div class="panel resume-card">
+        <div class="row" style="justify-content:space-between; align-items:flex-start">
+          <div style="min-width:0; flex:1">
+            <div><span class="dot" style="background:${esc(r.module_color)}"></span>
+              <span class="muted">${esc(r.module_code)}</span>
+              ${r.section_name ? ` · <b>${esc(r.section_name)}</b>` : ''}</div>
+            <div style="margin-top:4px"><b>${esc(r.title)}</b></div>
+            <div class="muted" style="font-size:11.5px; margin-top:4px">
+              ${slotLabel(r.slot)} · opened ${fmtAgo(r.last_opened_at)}
+              ${r.total_min ? ` · ${(r.total_min / 60).toFixed(1)}h total` : ''}
+              ${r.problem_count ? ` · ${r.solved_count}/${r.problem_count} problems` : ''}
+            </div>
+          </div>
+          <button class="primary small resume-open" data-id="${r.id}" data-title="${esc(r.title)}"
+            data-path="${esc(r.path || '')}">Continue</button>
+        </div>
+      </div>`).join('')}
+    </div>` : `<p class="muted">Open a material from any module — it will show up here so you can pick up after a break.</p>`}
+
+    <h3 style="margin-top:18px">Today's study — <span class="mono">${date}</span></h3>
+    ${studyLog.length ? `<table class="study-log-table"><thead><tr>
+      <th>When</th><th>Module</th><th>Section</th><th>Material</th><th>Time</th><th></th>
+    </tr></thead><tbody>
+      ${studyLog.map(e => `<tr>
+        <td class="mono">${fmtClock(e.started_at)}</td>
+        <td><span class="dot" style="background:${esc(e.module_color)}"></span>${esc(e.module_code)}</td>
+        <td class="muted">${esc(e.section_name || '—')}</td>
+        <td>${esc(e.material_title || '—')}</td>
+        <td class="mono">${e.duration_min}m</td>
+        <td style="text-align:right">
+          ${e.material_id ? `<button class="small log-open" data-id="${e.material_id}"
+            data-title="${esc(e.material_title)}" data-path="${esc(e.path || '')}">Open</button>` : ''}
+        </td>
+      </tr>`).join('')}
+    </tbody></table>` : `<p class="muted">Nothing logged yet today — open a file to study; time counts while the preview is focused.</p>`}
+
+    <div class="row" style="justify-content:space-between; margin-top:22px">
+      <h3>Modules</h3>
       <div class="row">
         <button id="index-lib">⟳ Index library</button>
         <button class="primary" id="add-mod">+ New module</button>
@@ -489,7 +563,7 @@ async function renderDashboard() {
           <div class="code"><span class="dot" style="background:${esc(m.color)}"></span>${esc(m.code)}
             ${m.exam_pct ? `<span class="chip" style="float:right">exam ${m.exam_pct}%</span>` : ''}</div>
           <div class="name">${esc(m.name)}</div>
-          <div class="stats">${m.topic_count} topics · ${m.material_count} materials
+          <div class="stats">${m.topic_count} sections · ${m.material_count} materials
             ${m.open_deadlines ? ` · <b style="color:var(--danger)">${m.open_deadlines} due</b>` : ''}</div>
           ${m.target_hours ? `<div class="stats" style="margin-top:6px">
             <span class="mbar" style="width:120px"><div style="width:${Math.min(100, (m.spent_min / 60) / m.target_hours * 100)}%"></div></span>
@@ -500,15 +574,25 @@ async function renderDashboard() {
     ${mods.length === 0 ? `<div class="panel" style="margin-top:14px">
         <b>First launch?</b>
         <p class="muted" style="margin:6px 0">Index your library to create modules from
-        <span class="mono">~/Desktop/year_three</span> automatically — including topics from
-        filenames and study tips from Year3_Study_Strategy.md.</p>
+        <span class="mono">~/Desktop/year_three</span> automatically.</p>
         <button class="primary" id="onboard-index">Index year_three now</button>
       </div>` : ''}`;
+
+  view.querySelectorAll('.resume-open, .log-open').forEach(b =>
+    b.addEventListener('click', () => openMaterial(Number(b.dataset.id), b.dataset.title, b.dataset.path)));
+  if (!resume.length && !studyLog.length) {
+    try {
+      await api.studyTodayLog(date);
+    } catch {
+      const hint = view.querySelector('#study-restart-hint');
+      if (hint) hint.style.display = 'block';
+    }
+  }
   view.querySelectorAll('.card').forEach(c =>
     c.addEventListener('click', () => location.hash = `#/module/${c.dataset.id}`));
-  view.querySelector('#index-lib').addEventListener('click', () => runIngest());
+  view.querySelector('#index-lib')?.addEventListener('click', () => runIngest());
   view.querySelector('#onboard-index')?.addEventListener('click', () => runIngest());
-  view.querySelector('#add-mod').addEventListener('click', async () => {
+  view.querySelector('#add-mod')?.addEventListener('click', async () => {
     const d = await formDialog('New module', [
       { name: 'code', label: 'Course code (e.g. COMP3121)' },
       { name: 'name', label: 'Course name' },

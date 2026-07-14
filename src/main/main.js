@@ -264,6 +264,9 @@ function registerIpc() {
     // open a material with an in-app preview (pdf/md/txt) or the OS default app
     'materials:open': (_, p) => openMaterial(p),
     'materials:closePreview': () => { closePreviewWindow(); },
+    'materials:touchOpen': (_, id) => { db.touchMaterialOpened(id); },
+    'study:todayLog': (_, date) => db.listStudyToday(date || new Date().toISOString().slice(0, 10)),
+    'study:resume': (_, limit) => db.listResumeItems(limit ?? 8),
     // settings
     'settings:get': (_, key) => db.getSetting(key),
     'settings:set': (_, key, value) => db.setSetting(key, value),
