@@ -66,6 +66,38 @@ and `urgency = deadline_weight / days_left`. Then:
 Marking a block **Done** logs a study session and bumps that topic's mastery
 (capped, diminishing), so tomorrow's plan adapts. **Skip** logs the miss.
 
+## CI/CD
+
+GitHub Actions workflow: `.github/workflows/ci.yml`, runs on every push to
+`main` / `feature/**` / `bugfix/**` / `hotfix/**` / `release/**` and on PRs.
+Each job exists because of a specific failure mode this project has hit:
+
+| Job | Issue it catches | Details |
+|---|---|---|
+| `commit-lint` | Commit messages drifting from the repo convention | Validates every commit on the branch against `type: description` / `JIRA-1234 type: description` (types: chore, ci, docs, feat, fix, perf, refactor, revert, style, test; Merge/Revert exempt) |
+| `unit-tests` | Logic regressions in the scheduler and ingest | `npm test` on a 4-way matrix (Node 20/22 × Ubuntu/macOS). Installs with `--ignore-scripts` + `ELECTRON_SKIP_BINARY_DOWNLOAD=1` so it never pays the ~100 MB Electron download — the code under test is pure Node |
+| `native-build` | `NODE_MODULE_VERSION` ABI mismatch between better-sqlite3 and Electron (the exact crash from first install) | Full `npm ci` on macOS (downloads Electron, compiles the native module, runs electron-rebuild), then loads better-sqlite3 *inside Electron's Node* (`ELECTRON_RUN_AS_NODE`) and executes a real SQL statement |
+| `smoke` | Main-process crashes at boot: broken DB migrations, bad IPC channel wiring, preload errors | Boots the actual app under `xvfb` with `--smoke`, which exits 0 after DB open + migrations + window load, printing `SMOKE_OK`; any main-process throw fails the job |
+
+### Unit test details (`npm test`)
+
+**`test/scheduler.test.js`** — the day-plan optimizer:
+- prereq-blocked topic is never scheduled; its blocking parent is scheduled first with an "unblocks X" rationale
+- once the prereq is mastered, the deadline-urgent weak topic tops the plan with the deadline named in its reason
+- a short cross-module review is interleaved after a long focus block
+- no block is shorter than 25 minutes; all blocks fit inside the availability window
+- deadlines marked done stop influencing the plan
+
+**`test/ingest.test.js`** — the year_three indexer (runs against a throwaway temp folder):
+- known folders map to the right module codes (`computer vision` → COMP3007)
+- junk directories (`node_modules/`, `Untitled/`, …) are never indexed
+- filenames become clean topic names (`08-monocular_depth_estimation.pdf` → *Monocular Depth Estimation*); dated exam papers do not become topics
+- material classification: dated exam PDFs → `exam-prep`, problem sets → `assignment`, numbered lectures → `lecture`
+- strategy.md parsing extracts the module code, exam percentage (e.g. 80%), and per-step tips
+
+To reproduce CI locally: `npm test` (unit), `npm start` (smoke, visible window),
+`ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e "require('better-sqlite3')"` (ABI).
+
 ## Layout
 
 ```

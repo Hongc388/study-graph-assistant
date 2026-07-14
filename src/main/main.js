@@ -25,6 +25,11 @@ app.whenReady().then(() => {
   db.open(app.getPath('userData'));
   registerIpc();
   createWindow();
+  // CI smoke mode: boot everything (DB open, migrations, IPC, window load),
+  // then exit 0. Any main-process throw exits non-zero and fails the job.
+  if (process.argv.includes('--smoke')) {
+    setTimeout(() => { console.log('SMOKE_OK'); app.exit(0); }, 3000);
+  }
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
