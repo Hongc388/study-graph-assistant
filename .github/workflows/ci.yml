@@ -91,8 +91,11 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - name: Full install (downloads Electron, compiles better-sqlite3, runs electron-rebuild)
+      - name: Full install (downloads Electron, compiles better-sqlite3 only)
         run: npm ci
+        env:
+          # pdfjs-dist optionally pulls canvas; we do not need it for the browser PDF preview
+          npm_config_optional: false
       - name: Verify the compiled module loads inside Electron's Node
         run: |
           ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e "
@@ -121,6 +124,8 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
       - name: Full install
         run: npm ci
+        env:
+          npm_config_optional: false
       - name: Boot the app headlessly and expect SMOKE_OK
         run: |
           unset ELECTRON_RUN_AS_NODE

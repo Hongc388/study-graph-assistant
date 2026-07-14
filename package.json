@@ -6,8 +6,8 @@
   "scripts": {
     "start": "electron .",
     "test": "node test/run.js",
-    "rebuild": "electron-rebuild -f -w better-sqlite3",
-    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "rebuild": "electron-rebuild -f -o better-sqlite3",
+    "postinstall": "electron-rebuild -f -o better-sqlite3",
     "ingest:dry-run": "node -e \"const i=require('./src/main/ingest');const r=i.scanRoot(process.argv[1]||process.env.HOME+'/Desktop/year_three');for(const m of r.modules)console.log(m.code.padEnd(10),m.files.length+' files,',m.topicSuggestions.length+' topic suggestions');console.log('strategy:',r.strategyPath)\""
   },
   "engines": {
