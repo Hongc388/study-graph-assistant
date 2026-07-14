@@ -1,23 +1,32 @@
 # CI for Study Graph. Each job targets a class of issue this project has hit:
 #
 #   commit-lint   → commit messages drifting from the repo convention
-#   unit-tests    → regressions in the pure logic (scheduler, ingest)
+#   unit-tests    → regressions in pure logic (scheduler, ingest, markdown, …)
 #   native-build  → better-sqlite3 / Electron ABI mismatches (NODE_MODULE_VERSION)
-#   smoke         → main-process crashes at boot (DB migrations, IPC wiring, preload)
+#   smoke         → main-process crashes at boot (DB migrations, IPC, preload, preview)
 #
 # unit-tests runs with --ignore-scripts so it never downloads the ~100 MB
-# Electron binary — the logic under test is pure Node.
+# Electron binary — the logic under test is pure Node (db tests skip without native sqlite).
 name: CI
 
 on:
   push:
     branches: [main, 'feature/**', 'bugfix/**', 'hotfix/**', 'release/**']
   pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   commit-lint:
     name: Commit message convention
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,20 +37,32 @@ jobs:
           # optional scope/breaking marker, and Merge/Revert commits.
           PATTERN='^(Merge|Revert)|^([A-Z][A-Z0-9]*-[0-9]+ )?(chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([a-zA-Z0-9_-]+\))?!?: .+'
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
-          [ -z "$BASE" ] || ! git cat-file -e "$BASE" 2>/dev/null && BASE=$(git rev-list --max-parents=0 HEAD)
+          # Fresh branch / force-push / missing parent → fall back to root.
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "$BASE" 2>/dev/null; then
+            BASE=$(git rev-list --max-parents=0 HEAD)
+          fi
           FAIL=0
+          COUNT=0
           while read -r line; do
+            COUNT=$((COUNT + 1))
             msg="${line#* }"
             if ! echo "$msg" | grep -qE "$PATTERN"; then
               echo "::error::Bad commit message: '$msg' (expected 'type: description' or 'JIRA-1234 type: description')"
               FAIL=1
+            else
+              echo "ok: $msg"
             fi
           done < <(git log --format='%H %s' "$BASE"..HEAD)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "No new commits in range $BASE..HEAD — skipping."
+          fi
           exit $FAIL
 
   unit-tests:
     name: Unit tests (node ${{ matrix.node }} / ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -57,12 +78,13 @@ jobs:
         run: npm ci --ignore-scripts
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
-      - name: Run scheduler + ingest tests
+      - name: Run unit tests
         run: npm test
 
   native-build:
     name: Native module rebuild (Electron ABI)
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -79,19 +101,28 @@ jobs:
             db.exec('CREATE TABLE t (x)');
             console.log('ABI_OK', process.versions.electron || 'electron-node');
           "
+      - name: Verify pdfjs-dist legacy UMD build is present (preview depends on it)
+        run: |
+          test -f node_modules/pdfjs-dist/legacy/build/pdf.min.js
+          test -f node_modules/pdfjs-dist/legacy/build/pdf.worker.min.js
+          echo PDFJS_OK
 
   smoke:
     name: App boot smoke test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
+      - name: Install xvfb for headless Electron
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
       - name: Full install
         run: npm ci
-      - name: Boot the app headlessly (xvfb) and expect SMOKE_OK
+      - name: Boot the app headlessly and expect SMOKE_OK
         run: |
-          xvfb-run -a npx electron . --smoke --no-sandbox | tee smoke.log
+          unset ELECTRON_RUN_AS_NODE
+          xvfb-run -a npx electron . --smoke --no-sandbox 2>&1 | tee smoke.log
           grep -q SMOKE_OK smoke.log

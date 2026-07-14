@@ -46,58 +46,84 @@ function closePreviewWindow() {
   }
 }
 
-function openMaterialPreview(filePath) {
+function previewKind(ext) {
+  if (ext === '.pdf') return 'pdf';
+  if (ext === '.html' || ext === '.htm') return 'html';
+  if (ext === '.md') return 'md';
+  return 'text';
+}
+
+function openMaterialPreview(filePath, materialId) {
   closePreviewWindow();
   const ext = path.extname(filePath).toLowerCase();
+  const mat = materialId ? db.getMaterial(materialId) : null;
+  const workerUrl = pathToFileURL(
+    path.join(__dirname, '../../node_modules/pdfjs-dist/legacy/build/pdf.worker.min.js')
+  ).href;
+
   previewWin = new BrowserWindow({
     width: 960,
     height: 720,
     title: path.basename(filePath),
     webPreferences: {
+      preload: path.join(__dirname, 'material-preview-preload.js'),
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false,
     },
   });
 
-  if (ext === '.pdf' || ext === '.html' || ext === '.htm') {
-    previewWin.loadURL(pathToFileURL(filePath).href);
-  } else {
-    let text;
-    try { text = fs.readFileSync(filePath, 'utf8'); }
-    catch { shell.openPath(filePath); return { mode: 'external' }; }
-    const body = `<pre style="white-space:pre-wrap;font-family:ui-monospace,monospace;padding:20px;line-height:1.5;color:#d6d6dd;background:#1a1a1e;margin:0">${escHtml(text)}</pre>`;
-    previewWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(
-      `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escHtml(path.basename(filePath))}</title></head><body>${body}</body></html>`)}`);
-  }
+  const bindPreviewEvents = () => {
+    previewWin.on('focus', () => {
+      clearSessionIdleTimer();
+      sendToRenderer('material:preview-focus');
+    });
+    previewWin.on('blur', () => {
+      sendToRenderer('material:preview-blur');
+      scheduleSessionIdleStop('preview-idle');
+    });
+    previewWin.on('close', () => {
+      if (previewWin && !previewWin.isDestroyed()) {
+        previewWin.webContents.executeJavaScript(
+          'typeof window.__savePreviewProgress === "function" && window.__savePreviewProgress()'
+        ).catch(() => {});
+      }
+    });
+    previewWin.on('closed', () => {
+      previewWin = null;
+      clearSessionIdleTimer();
+      if (!closingPreviewInternally) {
+        sendToRenderer('material:session-end', { reason: 'preview-closed' });
+      }
+      closingPreviewInternally = false;
+    });
+    previewWin.once('ready-to-show', () => {
+      previewWin.focus();
+      clearSessionIdleTimer();
+      sendToRenderer('material:preview-focus');
+    });
+  };
 
-  previewWin.on('focus', () => {
-    clearSessionIdleTimer();
-    sendToRenderer('material:preview-focus');
+  const fileUrl = pathToFileURL(filePath).href;
+
+  previewWin.loadFile(path.join(__dirname, 'material-preview.html'), {
+    query: {
+      file: filePath,
+      fileUrl,
+      materialId: String(materialId || ''),
+      ext: previewKind(ext),
+      page: String(mat?.last_page || 1),
+      scroll: String(mat?.last_scroll || 0),
+      worker: workerUrl,
+    },
   });
-  previewWin.on('blur', () => {
-    sendToRenderer('material:preview-blur');
-    scheduleSessionIdleStop('preview-idle');
-  });
-  previewWin.on('closed', () => {
-    previewWin = null;
-    clearSessionIdleTimer();
-    if (!closingPreviewInternally) {
-      sendToRenderer('material:session-end', { reason: 'preview-closed' });
-    }
-    closingPreviewInternally = false;
-  });
-  previewWin.once('ready-to-show', () => {
-    previewWin.focus();
-    clearSessionIdleTimer();
-    sendToRenderer('material:preview-focus');
-  });
+  bindPreviewEvents();
   return { mode: 'preview' };
 }
 
-function openMaterial(filePath) {
+function openMaterial(filePath, materialId) {
   if (!filePath || filePath.startsWith('http')) return { mode: 'none' };
   if (!fs.existsSync(filePath)) return { mode: 'none' };
-  if (isPreviewable(filePath)) return openMaterialPreview(filePath);
+  if (isPreviewable(filePath)) return openMaterialPreview(filePath, materialId);
   shell.openPath(filePath);
   return { mode: 'external' };
 }
@@ -222,7 +248,13 @@ function registerIpc() {
     'blocks:list': (_, date) => db.listBlocks(date),
     'blocks:create': (_, b) => { db.createBlock(b); return db.listBlocks(b.date); },
     'blocks:delete': (_, id) => db.deleteBlock(id),
+    'blocks:duplicate': (_, id) => {
+      const newId = db.duplicateBlock(id);
+      const b = db.getBlock(newId);
+      return b ? db.listBlocks(b.date) : [];
+    },
     'blocks:setStatus': (_, id, status) => db.setBlockStatus(id, status),
+    'blocks:reorder': (_, payload) => db.reorderBlocks(payload),
     'plan:generate': (_, { date, windows }) => {
       const plan = planDay({
         date, windows,
@@ -262,11 +294,49 @@ function registerIpc() {
     'problems:queue': (_, limit) => db.listProblemQueue(limit ?? 80),
     'sessions:create': (_, s) => db.createMaterialSession(s),
     // open a material with an in-app preview (pdf/md/txt) or the OS default app
-    'materials:open': (_, p) => openMaterial(p),
+    'materials:open': (_, payload) => {
+      const filePath = typeof payload === 'string' ? payload : payload?.path;
+      const materialId = typeof payload === 'object' ? payload?.materialId : null;
+      return openMaterial(filePath, materialId);
+    },
     'materials:closePreview': () => { closePreviewWindow(); },
+    'material:readPreviewFile': (_, filePath) => {
+      const ext = path.extname(filePath).toLowerCase();
+      return ext === '.pdf' ? fs.readFileSync(filePath) : fs.readFileSync(filePath, 'utf8');
+    },
+    'material:renderMarkdown': (_, src) => require('../shared/markdown-lite').renderMarkdown(src),
+    'material:saveProgress': (_, payload) => {
+      if (!payload?.materialId) return;
+      const fields = {};
+      if ('last_page' in payload) fields.last_page = payload.last_page;
+      if ('last_scroll' in payload) fields.last_scroll = payload.last_scroll;
+      db.saveMaterialProgress(payload.materialId, fields);
+    },
     'materials:touchOpen': (_, id) => { db.touchMaterialOpened(id); },
+    'notes:listReading': (_, materialId) => db.getReadingNoteGraph(materialId),
+    'notes:createReading': (_, n) => {
+      db.createReadingNote(n);
+      return db.getReadingNoteGraph(n.material_id);
+    },
+    'notes:updateReading': (_, n) => {
+      db.updateReadingNote(n);
+      return db.getReadingNoteGraph(n.material_id);
+    },
+    'notes:deleteReading': (_, { id, materialId }) => {
+      db.deleteReadingNote(id);
+      return db.getReadingNoteGraph(materialId);
+    },
+    'notes:linkReading': (_, { fromId, toId, materialId, kind }) => {
+      db.linkReadingNotes(fromId, toId, kind);
+      return db.getReadingNoteGraph(materialId);
+    },
+    'notes:unlinkReading': (_, { id, materialId }) => {
+      db.unlinkReadingNotes(id);
+      return db.getReadingNoteGraph(materialId);
+    },
     'study:todayLog': (_, date) => db.listStudyToday(date || new Date().toISOString().slice(0, 10)),
-    'study:resume': (_, limit) => db.listResumeItems(limit ?? 8),
+    'study:resume': (_, limit) => db.listResumeItems(Math.min(limit ?? 8, db.MAX_RECENT_ACCESS)),
+    'study:recentAccessMax': () => db.MAX_RECENT_ACCESS,
     // settings
     'settings:get': (_, key) => db.getSetting(key),
     'settings:set': (_, key, value) => db.setSetting(key, value),
@@ -291,4 +361,11 @@ function registerIpc() {
     },
   };
   for (const [channel, fn] of Object.entries(handlers)) ipcMain.handle(channel, fn);
+  ipcMain.on('material:saveProgressSync', (_, payload) => {
+    if (!payload?.materialId) return;
+    const fields = {};
+    if ('last_page' in payload) fields.last_page = payload.last_page;
+    if ('last_scroll' in payload) fields.last_scroll = payload.last_scroll;
+    db.saveMaterialProgress(payload.materialId, fields);
+  });
 }

@@ -20,7 +20,7 @@ function migrate() {
     code TEXT NOT NULL,
     name TEXT NOT NULL,
     term TEXT DEFAULT '',
-    color TEXT DEFAULT '#4f6df5'
+    color TEXT DEFAULT '#085041'
   );
   CREATE TABLE IF NOT EXISTS topics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,6 +100,21 @@ function migrate() {
     content TEXT NOT NULL,
     source TEXT DEFAULT ''
   );
+  CREATE TABLE IF NOT EXISTS reading_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    body TEXT DEFAULT '',
+    page INTEGER,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS reading_note_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_note INTEGER NOT NULL REFERENCES reading_notes(id) ON DELETE CASCADE,
+    to_note INTEGER NOT NULL REFERENCES reading_notes(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL DEFAULT 'related',
+    UNIQUE (from_note, to_note)
+  );
   `);
   // Additive migrations for databases created before these columns existed.
   const addCol = (table, col, decl) => {
@@ -113,6 +128,11 @@ function migrate() {
   addCol('materials', 'size', 'INTEGER');
   addCol('materials', 'seq', 'INTEGER'); // spine position from "01-", "Unit2", …
   addCol('materials', 'last_opened_at', 'TEXT');
+  addCol('materials', 'last_page', 'INTEGER');
+  addCol('materials', 'last_scroll', 'INTEGER');
+  addCol('study_sessions', 'block_id', 'INTEGER REFERENCES study_blocks(id) ON DELETE SET NULL');
+  addCol('material_sessions', 'block_id', 'INTEGER REFERENCES study_blocks(id) ON DELETE SET NULL');
+  addCol('study_blocks', 'sort_order', 'INTEGER');
   // topic_edges gained the 'exam_cluster' kind; SQLite can't alter a CHECK, so
   // rebuild the table once if the old constraint is still in place.
   const ddl = get("SELECT sql FROM sqlite_master WHERE type='table' AND name='topic_edges'")?.sql || '';
@@ -150,7 +170,7 @@ const listModules = () => all(`
   FROM modules m ORDER BY m.code`);
 const createModule = (m) =>
   run('INSERT INTO modules (code, name, term, color) VALUES (?,?,?,?)',
-    m.code, m.name, m.term || '', m.color || '#4f6df5').lastInsertRowid;
+    m.code, m.name, m.term || '', m.color || '#085041').lastInsertRowid;
 const updateModule = (m) =>
   run('UPDATE modules SET code=?, name=?, term=?, color=?, target_hours=? WHERE id=?',
     m.code, m.name, m.term || '', m.color, m.target_hours ?? null, m.id);
@@ -260,8 +280,9 @@ const deleteProblem = (id) => run('DELETE FROM problems WHERE id=?', id);
 
 // ---------- material sessions (the time ledger) ----------
 const createMaterialSession = (s) =>
-  run('INSERT INTO material_sessions (material_id, started_at, duration_min, source) VALUES (?,?,?,?)',
-    s.material_id, s.started_at || new Date().toISOString(), s.duration_min, s.source || 'manual').lastInsertRowid;
+  run('INSERT INTO material_sessions (material_id, started_at, duration_min, source, block_id) VALUES (?,?,?,?,?)',
+    s.material_id, s.started_at || new Date().toISOString(), s.duration_min, s.source || 'manual',
+    s.block_id ?? null).lastInsertRowid;
 
 // ---------- materials ----------
 // Spine-numbered files first, in curriculum order; the rest alphabetically.
@@ -276,8 +297,37 @@ const updateMaterial = (m) =>
     m.topic_id || null, m.path || '', m.type, m.title, m.due_at || null, m.id);
 const deleteMaterial = (id) => run('DELETE FROM materials WHERE id=?', id);
 const getMaterial = (id) => get('SELECT * FROM materials WHERE id=?', id);
-const touchMaterialOpened = (id) =>
+
+// Fixed-size access loop (LRU): only this many materials keep last_opened_at set.
+const MAX_RECENT_ACCESS = 12;
+
+function pruneRecentAccess(keep = MAX_RECENT_ACCESS) {
+  const keepers = all(
+    'SELECT id FROM materials WHERE last_opened_at IS NOT NULL ORDER BY last_opened_at DESC LIMIT ?',
+    keep
+  ).map(r => r.id);
+  if (!keepers.length) {
+    run('UPDATE materials SET last_opened_at=NULL WHERE last_opened_at IS NOT NULL');
+    return;
+  }
+  const placeholders = keepers.map(() => '?').join(',');
+  run(`UPDATE materials SET last_opened_at=NULL
+       WHERE last_opened_at IS NOT NULL AND id NOT IN (${placeholders})`, ...keepers);
+}
+
+function touchMaterialOpened(id) {
   run('UPDATE materials SET last_opened_at=? WHERE id=?', new Date().toISOString(), id);
+  pruneRecentAccess(MAX_RECENT_ACCESS);
+}
+
+const saveMaterialProgress = (id, fields) => {
+  const cur = getMaterial(id);
+  if (!cur) return;
+  const last_page = 'last_page' in fields ? fields.last_page : cur.last_page;
+  const last_scroll = 'last_scroll' in fields ? fields.last_scroll : cur.last_scroll;
+  run('UPDATE materials SET last_page=?, last_scroll=? WHERE id=?',
+    last_page ?? null, last_scroll ?? null, id);
+};
 
 // Today's study log + resume list for the companion home screen.
 const listStudyToday = (date) => {
@@ -310,7 +360,7 @@ const listStudyToday = (date) => {
 };
 
 const listResumeItems = (limit = 8) => all(`
-  SELECT m.id, m.title, m.path, m.type AS slot, m.last_opened_at,
+  SELECT m.id, m.title, m.path, m.type AS slot, m.last_opened_at, m.last_page, m.last_scroll,
          t.id AS topic_id, t.name AS section_name, t.mastery,
          mo.id AS module_id, mo.code AS module_code, mo.color AS module_color,
          (SELECT COUNT(*) FROM problems p WHERE p.topic_id = t.id) AS problem_count,
@@ -357,33 +407,87 @@ const deleteDeadline = (id) => run('DELETE FROM deadlines WHERE id=?', id);
 // ---------- study blocks / sessions ----------
 const listBlocks = (date) => all(`
   SELECT b.*, t.name AS topic_name, t.module_id, mo.code AS module_code, mo.color AS module_color,
-         ma.title AS material_title
+         ma.title AS material_title, ma.path AS material_path
   FROM study_blocks b
   LEFT JOIN topics t ON t.id = b.topic_id
   LEFT JOIN modules mo ON mo.id = t.module_id
   LEFT JOIN materials ma ON ma.id = b.material_id
-  WHERE b.date = ? ORDER BY b.start_min`, date);
+  WHERE b.date = ? ORDER BY (b.sort_order IS NULL), b.sort_order, b.start_min`, date);
 const clearPlannedBlocks = (date) =>
   run("DELETE FROM study_blocks WHERE date=? AND status='planned'", date);
-const createBlock = (b) =>
-  run('INSERT INTO study_blocks (date, start_min, end_min, topic_id, material_id, reason) VALUES (?,?,?,?,?,?)',
-    b.date, b.start_min, b.end_min, b.topic_id, b.material_id || null, b.reason || '').lastInsertRowid;
-const deleteBlock = (id) => run('DELETE FROM study_blocks WHERE id=?', id);
+const createBlock = (b) => {
+  const maxSort = get('SELECT COALESCE(MAX(sort_order), -1) AS m FROM study_blocks WHERE date=?',
+    b.date)?.m ?? -1;
+  return run(
+    'INSERT INTO study_blocks (date, start_min, end_min, topic_id, material_id, reason, sort_order) VALUES (?,?,?,?,?,?,?)',
+    b.date, b.start_min, b.end_min, b.topic_id, b.material_id || null, b.reason || '', maxSort + 1
+  ).lastInsertRowid;
+};
+const getBlock = (id) => get('SELECT * FROM study_blocks WHERE id=?', id);
+const duplicateBlock = (id) => {
+  const b = getBlock(id);
+  if (!b) return null;
+  return createBlock({
+    date: b.date,
+    start_min: b.start_min,
+    end_min: b.end_min,
+    topic_id: b.topic_id,
+    material_id: b.material_id,
+    reason: b.reason,
+  });
+};
+
+function clearBlockSessions(blockId) {
+  run('DELETE FROM study_sessions WHERE block_id=?', blockId);
+  run('DELETE FROM material_sessions WHERE block_id=?', blockId);
+}
+
+const deleteBlock = (id) => {
+  clearBlockSessions(id);
+  run('DELETE FROM study_blocks WHERE id=?', id);
+};
 
 // Marking a block done logs TIME (a fact), never a mastery bump (an opinion) —
 // mastery only moves when problems get solved or exposure accumulates.
 function setBlockStatus(id, status) {
-  const b = get('SELECT * FROM study_blocks WHERE id=?', id);
-  if (!b) return;
+  const b = getBlock(id);
+  if (!b || b.status === status) return;
+  const prev = b.status;
   run('UPDATE study_blocks SET status=? WHERE id=?', status, id);
-  if (b.topic_id) {
-    run('INSERT INTO study_sessions (topic_id, date, duration_min, outcome) VALUES (?,?,?,?)',
-      b.topic_id, b.date, status === 'done' ? b.end_min - b.start_min : 0, status);
+
+  if (status === 'planned' && (prev === 'done' || prev === 'skipped')) {
+    clearBlockSessions(id);
+    return;
   }
-  if (status === 'done' && b.material_id) {
-    createMaterialSession({ material_id: b.material_id,
-      duration_min: b.end_min - b.start_min, source: 'block' });
+  if (status === 'done' && prev === 'planned') {
+    if (b.topic_id) {
+      run('INSERT INTO study_sessions (topic_id, date, duration_min, outcome, block_id) VALUES (?,?,?,?,?)',
+        b.topic_id, b.date, b.end_min - b.start_min, 'done', id);
+    }
+    if (b.material_id) {
+      createMaterialSession({
+        material_id: b.material_id,
+        duration_min: b.end_min - b.start_min,
+        source: 'block',
+        block_id: id,
+      });
+    }
+    return;
   }
+  if (status === 'skipped' && prev === 'planned' && b.topic_id) {
+    run('INSERT INTO study_sessions (topic_id, date, duration_min, outcome, block_id) VALUES (?,?,?,?,?)',
+      b.topic_id, b.date, 0, 'skipped', id);
+  }
+}
+
+function reorderBlocks({ date, status, orderedIds }) {
+  const tx = db.transaction(() => {
+    orderedIds.forEach((id, i) => {
+      run('UPDATE study_blocks SET sort_order=?, status=? WHERE id=? AND date=?',
+        i, status, id, date);
+    });
+  });
+  tx();
 }
 
 // ---------- ingest (idempotent: re-running updates, never duplicates) ----------
@@ -493,6 +597,33 @@ function classifyLazy(name) { return require('./ingest').classify(name); }
 const listModuleNotes = (moduleId) =>
   all('SELECT * FROM module_notes WHERE module_id=? ORDER BY kind DESC, id', moduleId);
 
+// ---------- reading notes (concept nodes while studying a material) ----------
+const listReadingNotes = (materialId) =>
+  all('SELECT * FROM reading_notes WHERE material_id=? ORDER BY created_at, id', materialId);
+const listReadingNoteLinks = (materialId) => all(`
+  SELECT l.* FROM reading_note_links l
+  JOIN reading_notes a ON a.id = l.from_note
+  WHERE a.material_id = ?`, materialId);
+const createReadingNote = (n) =>
+  run('INSERT INTO reading_notes (material_id, label, body, page, created_at) VALUES (?,?,?,?,?)',
+    n.material_id, n.label.trim(), n.body || '', n.page ?? null, new Date().toISOString()).lastInsertRowid;
+const updateReadingNote = (n) =>
+  run('UPDATE reading_notes SET label=?, body=?, page=? WHERE id=?',
+    n.label.trim(), n.body || '', n.page ?? null, n.id);
+const deleteReadingNote = (id) => run('DELETE FROM reading_notes WHERE id=?', id);
+const linkReadingNotes = (fromId, toId, kind = 'related') => {
+  if (!fromId || !toId || fromId === toId) return null;
+  const a = Math.min(fromId, toId);
+  const b = Math.max(fromId, toId);
+  return run('INSERT OR IGNORE INTO reading_note_links (from_note, to_note, kind) VALUES (?,?,?)',
+    a, b, kind || 'related').lastInsertRowid;
+};
+const unlinkReadingNotes = (id) => run('DELETE FROM reading_note_links WHERE id=?', id);
+const getReadingNoteGraph = (materialId) => ({
+  notes: listReadingNotes(materialId),
+  links: listReadingNoteLinks(materialId),
+});
+
 // ---------- settings ----------
 const getSetting = (key) => get('SELECT value FROM settings WHERE key=?', key)?.value ?? null;
 const setSetting = (key, value) =>
@@ -503,12 +634,15 @@ module.exports = {
   listModules, createModule, updateModule, deleteModule,
   listTopics, createTopic, updateTopic, deleteTopic, mergeTopics,
   listProblemQueue,
-  listMaterials, getMaterial, touchMaterialOpened, createMaterial, updateMaterial, deleteMaterial, searchMaterials,
+  listMaterials, getMaterial, touchMaterialOpened, pruneRecentAccess, MAX_RECENT_ACCESS,
+  saveMaterialProgress, createMaterial, updateMaterial, deleteMaterial, searchMaterials,
   listStudyToday, listResumeItems,
   listEdges, createEdge, deleteEdge,
   listDeadlines, createDeadline, updateDeadline, deleteDeadline,
-  listBlocks, clearPlannedBlocks, createBlock, deleteBlock, setBlockStatus,
+  listBlocks, clearPlannedBlocks, createBlock, getBlock, duplicateBlock, deleteBlock, setBlockStatus, reorderBlocks,
   listProblems, createProblem, updateProblem, deleteProblem, createMaterialSession,
   applyIngest, listModuleNotes,
+  listReadingNotes, listReadingNoteLinks, createReadingNote, updateReadingNote, deleteReadingNote,
+  linkReadingNotes, unlinkReadingNotes, getReadingNoteGraph,
   getSetting, setSetting,
 };

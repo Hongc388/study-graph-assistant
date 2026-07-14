@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Preview</title>
+  <style>
+    :root {
+      --surface-0: #F7F6F3; --surface-1: #FFFFFF; --surface-2: #F1EFE8;
+      --border: #E5E3DB; --text-primary: #1A1A18; --text-secondary: #5C5B57;
+      --text-muted: #8A8983; --c-teal-bg: #E1F5EE; --c-teal: #085041;
+      --c-coral: #712B13; --c-red-bg: #FCEBEB; --c-red: #791F1F;
+      --radius: 8px; --radius-card: 12px;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--surface-0); color: var(--text-secondary);
+      font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif; }
+    #shell { display: flex; height: 100%; }
+    #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    #toolbar {
+      display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+      background: var(--surface-1); border-bottom: 0.5px solid var(--border); font-size: 12px;
+      flex-shrink: 0;
+    }
+    #toolbar button, #notes-panel button {
+      background: var(--surface-1); color: var(--text-primary); border: 0.5px solid var(--border);
+      border-radius: var(--radius); padding: 4px 10px; cursor: pointer; font-size: 12px;
+    }
+    #toolbar button:hover, #notes-panel button:hover { background: var(--surface-2); }
+    #toolbar button:disabled { opacity: .4; cursor: default; }
+    #page-info { margin-left: auto; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+    #content { flex: 1; overflow: hidden; background: var(--surface-0); }
+    #pdf-wrap, #text-view, #md-view, #html-wrap { height: 100%; overflow: auto; }
+    #pdf-wrap { text-align: center; padding: 12px; }
+    #text-view {
+      padding: 20px; white-space: pre-wrap; line-height: 1.55; font-size: 13px;
+      font-family: ui-monospace, monospace; margin: 0; color: var(--text-primary);
+    }
+    #md-view {
+      padding: 24px 32px; line-height: 1.65; font-size: 14px; max-width: 820px; margin: 0 auto;
+      color: var(--text-primary);
+    }
+    #md-view h1, #md-view h2, #md-view h3 { margin: 1.2em 0 .5em; line-height: 1.25; }
+    #md-view h1 { font-size: 1.6em; border-bottom: 0.5px solid var(--border); padding-bottom: .3em; }
+    #md-view p { margin: .65em 0; }
+    #md-view ul, #md-view ol { margin: .5em 0 .5em 1.4em; }
+    #md-view code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-size: .92em; }
+    #md-view pre.md-code { background: var(--surface-1); border: 0.5px solid var(--border); border-radius: var(--radius);
+      padding: 14px; overflow-x: auto; font-size: 12.5px; }
+    #md-view a { color: var(--c-teal); }
+    #html-wrap { padding: 0; }
+    #html-wrap iframe { width: 100%; height: 100%; border: 0; background: #fff; }
+    canvas { display: block; max-width: 100%; height: auto; box-shadow: 0 2px 16px rgba(26,26,24,.08); margin: 0 auto 12px; }
+
+    #notes-panel {
+      width: 300px; flex-shrink: 0; border-left: 0.5px solid var(--border);
+      background: var(--surface-1); display: flex; flex-direction: column; min-height: 0;
+    }
+    #notes-panel.collapsed { width: 36px; }
+    #notes-panel.collapsed .notes-body { display: none; }
+    #notes-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 9px 10px; border-bottom: 0.5px solid var(--border); font-size: 12px; font-weight: 700;
+      color: var(--text-primary);
+    }
+    .notes-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 8px; gap: 8px; }
+    #notes-graph {
+      height: 200px; background: var(--surface-0); border: 0.5px solid var(--border);
+      border-radius: var(--radius-card); flex-shrink: 0;
+    }
+    .nedge { stroke: #C8C5BA; stroke-width: 1.2; }
+    .nnode { cursor: pointer; }
+    #notes-hint { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+    #notes-hint.armed { color: var(--c-teal); }
+    #note-input {
+      width: 100%; background: var(--surface-0); color: var(--text-primary); border: 0.5px solid var(--border);
+      border-radius: var(--radius); padding: 8px; font-size: 12.5px; resize: vertical; min-height: 54px;
+    }
+    #note-input:focus { outline: 1.5px solid var(--c-teal); border-color: var(--c-teal); }
+    #note-add { background: var(--c-teal) !important; color: #fff !important; border-color: var(--c-teal) !important; }
+    #notes-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+    .note-item {
+      background: var(--surface-0); border: 0.5px solid var(--border); border-radius: 7px; padding: 7px 8px;
+      font-size: 12px; cursor: pointer; color: var(--text-primary);
+    }
+    .note-item.selected { border-color: var(--c-teal); background: var(--c-teal-bg); }
+    .note-item .meta { font-size: 10.5px; color: var(--text-muted); margin-top: 3px; }
+    .note-item .row { display: flex; justify-content: space-between; gap: 6px; align-items: flex-start; }
+    .danger-ghost { background: transparent !important; border-color: transparent !important; color: var(--c-red) !important; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <div id="shell">
+    <div id="main">
+      <div id="toolbar" hidden>
+        <button id="prev" type="button">← Prev</button>
+        <button id="next" type="button">Next →</button>
+        <button id="zoom-out" type="button" hidden>−</button>
+        <button id="zoom-in" type="button" hidden>+</button>
+        <span id="page-info"></span>
+      </div>
+      <div id="content">
+        <div id="pdf-wrap" hidden></div>
+        <pre id="text-view" hidden></pre>
+        <div id="md-view" hidden></div>
+        <div id="html-wrap" hidden><iframe id="preview-frame" title="Preview"></iframe></div>
+      </div>
+    </div>
+    <aside id="notes-panel" hidden>
+      <div id="notes-head">
+        <span>Reading notes</span>
+        <button id="notes-toggle" type="button" title="Collapse">⟩</button>
+      </div>
+      <div class="notes-body">
+        <svg id="notes-graph"></svg>
+        <div id="notes-hint">Type a concept while reading. Click two notes to link them.</div>
+        <textarea id="note-input" placeholder="New note / concept… (Enter to add, Shift+Enter for newline)"></textarea>
+        <button id="note-add" type="button">+ Add note</button>
+        <div id="notes-list"></div>
+      </div>
+    </aside>
+  </div>
+  <script src="../../node_modules/pdfjs-dist/legacy/build/pdf.min.js"></script>
+  <script src="../renderer/graphview.js"></script>
+  <script src="material-preview.js"></script>
+</body>
+</html>

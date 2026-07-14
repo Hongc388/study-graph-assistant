@@ -44,24 +44,58 @@ function materialSlot(m) {
   return 'other';
 }
 
+const SLOT_COLORS = {
+  lecture: '#085041',
+  problemset: '#3C3489',
+  reference: '#444441',
+  lab: '#712B13',
+  other: '#8A8983',
+};
+
+/** Map module color / code → calm tag class (2–3 ramps max in a view). */
+function tagClassForModule(modOrCode, color) {
+  const code = (typeof modOrCode === 'string' ? modOrCode : modOrCode?.code || '').toUpperCase();
+  const c = (color || (typeof modOrCode === 'object' ? modOrCode?.color : '') || '').toLowerCase();
+  if (code.includes('3009') || c === '#085041') return 'tag-teal';
+  if (code.includes('3007') || c === '#3c3489') return 'tag-purple';
+  if (code.includes('3077') || c === '#712b13') return 'tag-coral';
+  if (code.includes('3003') || code.includes('3004') || c === '#72243e') return 'tag-pink';
+  if (c === '#791f1f') return 'tag-red';
+  if (c === '#27500a') return 'tag-green';
+  return 'tag-gray';
+}
+
 function matChipHtml(m) {
-  return `<span class="mat-chip" draggable="true" data-id="${m.id}" data-path="${esc(m.path)}"
-    title="${esc(m.path)}">${esc(m.title)}</span>`;
+  const hint = m.last_page ? `page ${m.last_page}`
+    : m.last_scroll ? `scrolled ${m.last_scroll}px` : '';
+  const slot = materialSlot(m);
+  return `<div class="mat-card" draggable="true" data-id="${m.id}" data-path="${esc(m.path)}"
+    data-title="${esc(m.title)}" title="${esc(m.path)}${hint ? ` · ${hint}` : ''}">
+    <div class="mat-card-bar" style="background:${SLOT_COLORS[slot] || SLOT_COLORS.other}"></div>
+    <div class="mat-card-body">
+      <div class="mat-card-title">${esc(m.title)}</div>
+      <div class="mat-card-meta muted">
+        ${hint ? `<span>${esc(hint)}</span>` : '<span>Double-click to open</span>'}
+      </div>
+    </div>
+  </div>`;
 }
 
 function bindSectionBoard() {
-  view.querySelectorAll('.mat-chip').forEach(chip => {
-    chip.addEventListener('dragstart', (e) => {
-      e.dataTransfer.setData('text/material-id', chip.dataset.id);
-      chip.classList.add('dragging');
+  view.querySelectorAll('.mat-card').forEach(card => {
+    card.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/material-id', card.dataset.id);
+      card.classList.add('dragging');
     });
-    chip.addEventListener('dragend', () => chip.classList.remove('dragging'));
-    chip.addEventListener('dblclick', () =>
-      openMaterial(Number(chip.dataset.id), chip.textContent, chip.dataset.path));
+    card.addEventListener('dragend', () => card.classList.remove('dragging'));
+    card.addEventListener('dblclick', () =>
+      openMaterial(Number(card.dataset.id), card.dataset.title, card.dataset.path));
   });
   view.querySelectorAll('.slot-drop, .inbox-drop').forEach(zone => {
     zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('over'); });
-    zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+    zone.addEventListener('dragleave', (e) => {
+      if (!zone.contains(e.relatedTarget)) zone.classList.remove('over');
+    });
     zone.addEventListener('drop', async (e) => {
       e.preventDefault();
       zone.classList.remove('over');
@@ -246,7 +280,7 @@ async function openMaterial(materialId, title, path) {
   if (materialId) api.materialsTouchOpen(materialId);
   let mode = 'none';
   if (path && !path.startsWith('http')) {
-    const r = await api.materialsOpen(path);
+    const r = await api.materialsOpen({ path, materialId });
     mode = r?.mode || 'external';
   }
   startTimer(materialId, title, mode);
@@ -495,10 +529,10 @@ async function renderDashboard() {
   const todayMin = studyLog.reduce((n, e) => n + (e.duration_min || 0), 0);
 
   view.innerHTML = `
-    ${soon.length ? `<div class="panel exam-banner" style="border-color:var(--danger); margin-bottom:14px">
-      <b style="color:var(--danger)">Exam countdown</b>
+    ${soon.length ? `<div class="panel exam-banner" style="margin-bottom:14px">
+      <b>Exam countdown</b>
       <div class="row" style="flex-wrap:wrap; gap:8px; margin-top:8px">
-        ${soon.map(d => `<span class="chip" style="border-color:var(--danger)">
+        ${soon.map(d => `<span class="tag tag-red">
           <span class="dot" style="background:${esc(d.module_color)}"></span>
           ${esc(d.module_code)} · ${esc(d.title)} · <b>${d.days}d</b></span>`).join('')}
       </div>
@@ -512,7 +546,8 @@ async function renderDashboard() {
       Restart the app (Cmd+Q, then <span class="mono">npm start</span>) to enable today's log and resume.
     </p>
 
-    <h3 style="margin-top:14px">Continue where you left off</h3>
+    <h3 style="margin-top:14px">Continue where you left off
+      <span class="muted" style="font-weight:400; font-size:12px"> · last ${resume.length || 0} opened</span></h3>
     ${resume.length ? `<div class="resume-grid">
       ${resume.map(r => `<div class="panel resume-card">
         <div class="row" style="justify-content:space-between; align-items:flex-start">
@@ -523,6 +558,8 @@ async function renderDashboard() {
             <div style="margin-top:4px"><b>${esc(r.title)}</b></div>
             <div class="muted" style="font-size:11.5px; margin-top:4px">
               ${slotLabel(r.slot)} · opened ${fmtAgo(r.last_opened_at)}
+              ${r.last_page ? ` · <b>page ${r.last_page}</b>` : ''}
+              ${r.last_scroll ? (r.last_page ? ` · scroll ${r.last_scroll}px` : ` · scrolled ${r.last_scroll}px`) : ''}
               ${r.total_min ? ` · ${(r.total_min / 60).toFixed(1)}h total` : ''}
               ${r.problem_count ? ` · ${r.solved_count}/${r.problem_count} problems` : ''}
             </div>
@@ -561,10 +598,11 @@ async function renderDashboard() {
       ${mods.map(m => `
         <div class="card" data-id="${m.id}">
           <div class="code"><span class="dot" style="background:${esc(m.color)}"></span>${esc(m.code)}
-            ${m.exam_pct ? `<span class="chip" style="float:right">exam ${m.exam_pct}%</span>` : ''}</div>
+            <span class="tag ${tagClassForModule(m)}" style="float:right; font-weight:600">${esc(m.name.split(' ')[0])}</span>
+            ${m.exam_pct ? `<span class="chip" style="float:right; margin-right:6px">exam ${m.exam_pct}%</span>` : ''}</div>
           <div class="name">${esc(m.name)}</div>
           <div class="stats">${m.topic_count} sections · ${m.material_count} materials
-            ${m.open_deadlines ? ` · <b style="color:var(--danger)">${m.open_deadlines} due</b>` : ''}</div>
+            ${m.open_deadlines ? ` · <b class="tag tag-red" style="font-weight:700">${m.open_deadlines} due</b>` : ''}</div>
           ${m.target_hours ? `<div class="stats" style="margin-top:6px">
             <span class="mbar" style="width:120px"><div style="width:${Math.min(100, (m.spent_min / 60) / m.target_hours * 100)}%"></div></span>
             <span class="mono"> ${(m.spent_min / 60).toFixed(0)}h / ${m.target_hours}h</span></div>`
@@ -636,7 +674,7 @@ async function renderModule(idStr) {
     </div>
 
     <h3>Sections &amp; materials</h3>
-    <p class="muted" style="margin:0 0 10px">Drag files into a section slot — the app renames them on disk
+    <p class="muted" style="margin:0 0 10px">Trello-style board — drag file cards into a column. Files rename on disk
       (e.g. <span class="mono">support-vector-machine-lecture.pdf</span>). Double-click to open.</p>
     <div class="row" style="margin-bottom:10px">
       <button id="add-topic" class="primary small">+ Section</button>
@@ -646,23 +684,37 @@ async function renderModule(idStr) {
       <span id="ai-topics-msg" class="muted"></span>
     </div>
 
-    <div class="panel inbox-panel">
-      <b>Inbox</b> <span class="muted">— not yet assigned to a section</span>
-      <div class="inbox-drop slot-drop" data-slot="other">
-        ${materials.filter(m => !m.topic_id).map(matChipHtml).join('')
-          || '<span class="muted">Drop here to unassign · import or re-index to fill inbox</span>'}
+    <div class="section-board-wrap inbox-panel" data-section="inbox">
+      <div class="section-board-head">
+        <div>
+          <b>Inbox</b>
+          <span class="muted" style="font-size:12px; margin-left:6px">unassigned files</span>
+        </div>
+        <span class="kanban-count">${materials.filter(m => !m.topic_id).length}</span>
+      </div>
+      <div class="slot-grid section-kanban">
+        <div class="slot-col kanban-col">
+          <div class="slot-head kanban-col-head" style="border-top-color:${SLOT_COLORS.other}">
+            <span>Unsorted</span>
+            <span class="kanban-count">${materials.filter(m => !m.topic_id).length}</span>
+          </div>
+          <div class="inbox-drop slot-drop kanban-drop" data-slot="other">
+            ${materials.filter(m => !m.topic_id).map(matChipHtml).join('')
+              || '<span class="muted slot-hint">Drop here to unassign · import or re-index to fill</span>'}
+          </div>
+        </div>
       </div>
     </div>
 
     <div id="section-board">
       ${topics.length ? topics.map(t => {
         const secMats = materials.filter(m => m.topic_id === t.id);
-        return `<div class="section-card panel" data-section="${t.id}">
-          <div class="row" style="justify-content:space-between; align-items:flex-start; margin-bottom:8px">
+        return `<div class="section-board-wrap section-card" data-section="${t.id}">
+          <div class="section-board-head">
             <div>
               <b>${esc(t.name)}</b>
-              ${t.summary ? `<div class="muted" style="font-size:12px">${esc(t.summary)}</div>` : ''}
-              <div style="margin-top:4px">
+              ${t.summary ? `<div class="muted" style="font-size:12px; margin-top:2px">${esc(t.summary)}</div>` : ''}
+              <div style="margin-top:6px">
                 <span class="mbar"><div style="width:${t.mastery * 100}%"></div></span>
                 <span class="muted"> ${(t.mastery * 100).toFixed(0)}% readiness</span>
                 ${t.problem_count ? `<span class="chip">${t.solved_count}/${t.problem_count} solved</span>` : ''}
@@ -675,13 +727,16 @@ async function renderModule(idStr) {
               <button class="danger-ghost small del-topic" data-id="${t.id}">✕</button>
             </div>
           </div>
-          <div class="slot-grid">
+          <div class="slot-grid section-kanban">
             ${SECTION_SLOTS.map(([slot, label]) => {
               const items = secMats.filter(m => materialSlot(m) === slot);
-              return `<div class="slot-col">
-                <div class="slot-head">${esc(label)}</div>
-                <div class="slot-drop" data-topic-id="${t.id}" data-slot="${slot}">
-                  ${items.map(matChipHtml).join('') || '<span class="muted slot-hint">drop here</span>'}
+              return `<div class="slot-col kanban-col">
+                <div class="slot-head kanban-col-head" style="border-top-color:${SLOT_COLORS[slot]}">
+                  <span>${esc(label)}</span>
+                  <span class="kanban-count">${items.length}</span>
+                </div>
+                <div class="slot-drop kanban-drop" data-topic-id="${t.id}" data-slot="${slot}">
+                  ${items.map(matChipHtml).join('') || '<span class="muted slot-hint">Drop files here</span>'}
                 </div>
               </div>`;
             }).join('')}
@@ -698,12 +753,13 @@ async function renderModule(idStr) {
 
   view.querySelector('#search').addEventListener('input', (e) => {
     const q = e.target.value.trim().toLowerCase();
-    view.querySelectorAll('.mat-chip').forEach(chip => {
-      chip.style.display = !q || chip.textContent.toLowerCase().includes(q) ? '' : 'none';
+    view.querySelectorAll('.mat-card').forEach(card => {
+      const title = (card.dataset.title || card.textContent || '').toLowerCase();
+      card.style.display = !q || title.includes(q) ? '' : 'none';
     });
-    view.querySelectorAll('.section-card').forEach(card => {
-      const any = [...card.querySelectorAll('.mat-chip')].some(c => c.style.display !== 'none');
-      card.style.display = !q || any ? '' : 'none';
+    view.querySelectorAll('.section-card, .section-board-wrap[data-section="inbox"]').forEach(board => {
+      const any = [...board.querySelectorAll('.mat-card')].some(c => c.style.display !== 'none');
+      board.style.display = !q || any ? '' : 'none';
     });
   });
 
@@ -899,7 +955,8 @@ let graphScope = null;      // module id | 'all'
 let graphKinds = null;      // Set of visible edge kinds
 let graphFocus = null;      // topic id in focus mode (1-hop subgraph)
 async function renderGraph_() {
-  const [mods, allTopics, allEdges] = await Promise.all([api.modulesList(), api.topicsList(), api.edgesList()]);
+  const [mods, allTopics, allEdges] = await Promise.all([
+    api.modulesList(), api.topicsList(), api.edgesList()]);
   const colors = new Map(mods.map(m => [m.id, m.color]));
   if (graphScope === null) {
     const saved = await api.settingsGet('graph_scope');
@@ -943,7 +1000,7 @@ async function renderGraph_() {
         <option value="all" ${graphScope === 'all' ? 'selected' : ''}>All modules (advanced)</option>
       </select>
       ${focusTopic
-        ? `<span class="chip" style="background:#26263a; color:var(--ink-bright)">focus: ${esc(focusTopic.name)}</span>
+        ? `<span class="tag tag-teal">focus: ${esc(focusTopic.name)}</span>
            <button class="small" id="g-unfocus">✕ exit focus</button>
            <span class="muted">showing 1-hop neighbors, all edge kinds</span>`
         : ['prereq', 'related', 'cross_module', 'analogy', 'exam_cluster'].map(k =>
@@ -1068,13 +1125,131 @@ function schedTableOpen() {
 }
 function schedTableClose() { return '</tbody></table>'; }
 
+const KANBAN_COLS = [
+  ['planned', 'To do', 'var(--c-teal)'],
+  ['done', 'Done', 'var(--c-green)'],
+  ['skipped', 'Skipped', 'var(--c-gray)'],
+];
+
+function blockCardHtml(b) {
+  const dur = b.end_min - b.start_min;
+  const actions = b.status === 'planned'
+    ? `<button class="small mark" data-id="${b.id}" data-s="done">Done</button>
+       <button class="small mark" data-id="${b.id}" data-s="skipped">Skip</button>`
+    : b.status === 'done'
+      ? `<button class="small reopen-block" data-id="${b.id}">Reopen</button>
+         <button class="small dup-block" data-id="${b.id}">+ Again</button>`
+      : `<button class="small reopen-block" data-id="${b.id}">Reopen</button>`;
+  return `<div class="block-card" draggable="true" data-id="${b.id}" data-status="${esc(b.status)}">
+    <div class="block-card-bar" style="background:${esc(b.module_color || '#666')}"></div>
+    <div class="block-card-body">
+      <div class="block-card-time mono">${fmtMin(b.start_min)}–${fmtMin(b.end_min)}
+        <span class="muted"> · ${dur}m</span></div>
+      <div class="block-card-mod">${esc(b.module_code || '—')}</div>
+      <div class="block-card-title">${esc(b.topic_name || '(topic removed)')}</div>
+      ${b.material_title ? `<span class="chip block-card-mat">${esc(b.material_title)}</span>` : ''}
+      ${b.reason ? `<div class="block-card-note">${esc(b.reason)}</div>` : ''}
+      <div class="block-card-foot">
+        ${b.material_path ? `<button class="small open-block-mat" data-id="${b.material_id}"
+          data-title="${esc(b.material_title)}" data-path="${esc(b.material_path)}">Open</button>` : ''}
+        <div class="block-card-actions">${actions}
+          <button class="danger-ghost small del-block" data-id="${b.id}"
+            data-logged="${b.status === 'done' ? '1' : '0'}">✕</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function todayKanbanHtml(blocks, date) {
+  const byStatus = (s) => blocks.filter(b => b.status === s);
+  return `<div class="kanban-board">
+    ${KANBAN_COLS.map(([status, label, color]) => {
+      const items = byStatus(status);
+      return `<div class="kanban-col">
+        <div class="kanban-col-head" style="border-top-color:${color}">
+          <span>${label}</span><span class="kanban-count">${items.length}</span>
+        </div>
+        <div class="kanban-drop" data-status="${status}" data-date="${esc(date)}">
+          ${items.length ? items.map(blockCardHtml).join('')
+            : '<span class="kanban-empty muted">Drop cards here</span>'}
+        </div>
+        ${status === 'planned' ? '<button class="kanban-add" type="button">+ Add block</button>' : ''}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function kanbanDragAfter(container, y) {
+  const cards = [...container.querySelectorAll('.block-card:not(.dragging)')];
+  return cards.reduce((closest, child) => {
+    const box = child.getBoundingClientRect();
+    const offset = y - box.top - box.height / 2;
+    if (offset < 0 && offset > closest.offset) return { offset, element: child };
+    return closest;
+  }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
+}
+
+function bindKanbanBoard(blocks, date, topics, mods, materials) {
+  let dragId = null;
+  view.querySelectorAll('.block-card').forEach(card => {
+    card.addEventListener('dragstart', (e) => {
+      dragId = card.dataset.id;
+      card.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/block-id', dragId);
+    });
+    card.addEventListener('dragend', () => {
+      card.classList.remove('dragging');
+      dragId = null;
+      view.querySelectorAll('.kanban-drop.over').forEach(z => z.classList.remove('over'));
+    });
+  });
+
+  view.querySelectorAll('.kanban-drop').forEach(zone => {
+    zone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      zone.classList.add('over');
+      const id = dragId || e.dataTransfer.getData('text/block-id');
+      if (!id) return;
+      const card = zone.querySelector(`.block-card[data-id="${id}"]`)
+        || view.querySelector(`.block-card[data-id="${id}"]`);
+      if (!card) return;
+      const after = kanbanDragAfter(zone, e.clientY);
+      zone.querySelectorAll('.kanban-empty').forEach(el => el.remove());
+      if (after) zone.insertBefore(card, after);
+      else zone.appendChild(card);
+    });
+    zone.addEventListener('dragleave', (e) => {
+      if (!zone.contains(e.relatedTarget)) zone.classList.remove('over');
+    });
+    zone.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      zone.classList.remove('over');
+      const id = Number(dragId || e.dataTransfer.getData('text/block-id'));
+      if (!id) return;
+      const newStatus = zone.dataset.status;
+      const block = blocks.find(b => b.id === id);
+      const orderedIds = [...zone.querySelectorAll('.block-card')].map(c => Number(c.dataset.id));
+      if (block && block.status !== newStatus) await api.blocksSetStatus(id, newStatus);
+      await api.blocksReorder({ date: zone.dataset.date, status: newStatus, orderedIds });
+      route();
+    });
+  });
+
+  view.querySelectorAll('.kanban-add').forEach(btn =>
+    btn.addEventListener('click', () => promptStudyBlock(date, topics, mods, materials)));
+}
+
 function planRowHtml(b) {
-  const faded = b.status !== 'planned' ? ' style="opacity:.45"' : '';
+  const faded = b.status !== 'planned' ? ' style="opacity:.65"' : '';
   const actions = b.status === 'planned'
     ? `<button class="small mark" data-id="${b.id}" data-s="done">Done</button>
        <button class="small mark" data-id="${b.id}" data-s="skipped">Skip</button>
-       <button class="danger-ghost small del-block" data-id="${b.id}">✕</button>`
-    : '';
+       <button class="danger-ghost small del-block" data-id="${b.id}" data-logged="0">✕</button>`
+    : `<button class="small reopen-block" data-id="${b.id}">Reopen</button>
+       <button class="small dup-block" data-id="${b.id}">+ Again</button>
+       <button class="danger-ghost small del-block" data-id="${b.id}" data-logged="${b.status === 'done' ? '1' : '0'}">✕</button>`;
   return `<tr class="sched-row sched-study"${faded}>
     <td><span class="chip">study</span></td>
     <td class="mono" style="white-space:nowrap">${fmtMin(b.start_min)}–${fmtMin(b.end_min)}</td>
@@ -1185,15 +1360,17 @@ async function renderSchedule() {
 
   if (scheduleTab === 'today') {
     const openDls = dls.filter(d => !d.done).sort((a, b) => a.due_at.localeCompare(b.due_at));
-    const planRows = blocks.length
-      ? blocks.map(planRowHtml).join('')
-      : '<tr><td colspan="7" class="muted">No blocks yet — use + Study block to plan your day.</td></tr>';
-    const dlRows = openDls.length
-      ? `<tr class="sched-sep"><td colspan="7"><b>Upcoming deadlines</b></td></tr>`
-        + openDls.map(d => deadlineRowHtml(d, topics)).join('')
+    const dlSection = openDls.length
+      ? `<div class="today-deadlines panel" style="padding:12px 14px">
+          <h3>Upcoming deadlines</h3>
+          ${schedTableOpen()}${openDls.map(d => deadlineRowHtml(d, topics)).join('')}${schedTableClose()}
+        </div>`
       : '';
 
-    body.innerHTML = schedTableOpen() + planRows + dlRows + schedTableClose();
+    body.innerHTML = `${blocks.length ? '' : '<p class="muted" style="margin-top:6px">Plan your day — drag cards between columns or add a block below.</p>'}
+      ${todayKanbanHtml(blocks, date)}${dlSection}`;
+
+    bindKanbanBoard(blocks, date, topics, mods, materials);
     view.querySelector('#add-block')?.addEventListener('click', () =>
       promptStudyBlock(date, topics, mods, materials));
   } else if (scheduleTab === 'list') {
@@ -1243,17 +1420,17 @@ async function renderSchedule() {
 
     return `<div class="panel" style="overflow-x:auto">
       <svg viewBox="0 0 ${W} ${H}" style="width:100%; min-width:700px; display:block">
-        <line x1="${PAD}" y1="${AXIS_Y}" x2="${W - PAD}" y2="${AXIS_Y}" stroke="#3c3c48" stroke-width="1.5"/>
+        <line x1="${PAD}" y1="${AXIS_Y}" x2="${W - PAD}" y2="${AXIS_Y}" stroke="var(--border)" stroke-width="1.5"/>
         ${ticks.map(tk => `
-          <line x1="${x(tk.t)}" y1="${AXIS_Y - 4}" x2="${x(tk.t)}" y2="${AXIS_Y + 4}" stroke="#3c3c48"/>
-          <text x="${x(tk.t)}" y="${AXIS_Y + 18}" text-anchor="middle" fill="#7d7d8a" font-size="10">${tk.label}</text>`).join('')}
-        <line x1="${x(now)}" y1="26" x2="${x(now)}" y2="${AXIS_Y}" stroke="#5b8cff" stroke-width="1.5" stroke-dasharray="4 3"/>
-        <text x="${x(now)}" y="16" text-anchor="middle" fill="#5b8cff" font-size="10" font-weight="700">today</text>
+          <line x1="${x(tk.t)}" y1="${AXIS_Y - 4}" x2="${x(tk.t)}" y2="${AXIS_Y + 4}" stroke="var(--border)"/>
+          <text x="${x(tk.t)}" y="${AXIS_Y + 18}" text-anchor="middle" fill="var(--text-muted)" font-size="10">${tk.label}</text>`).join('')}
+        <line x1="${x(now)}" y1="26" x2="${x(now)}" y2="${AXIS_Y}" stroke="var(--c-teal)" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="${x(now)}" y="16" text-anchor="middle" fill="var(--c-teal)" font-size="10" font-weight="700">today</text>
         ${dots.map(({ d, i, cx, cy, overdue, days }) => `
           <g class="dl-dot" data-i="${i}" style="cursor:pointer">
             <line x1="${cx}" y1="${cy}" x2="${cx}" y2="${AXIS_Y}" stroke="${esc(d.module_color)}" stroke-width="1" opacity=".35"/>
             <circle cx="${cx}" cy="${cy}" r="${6 + Math.min(4, d.weight * 1.5)}"
-              fill="${esc(d.module_color)}" stroke="#1a1a1e" stroke-width="2"
+              fill="${esc(d.module_color)}" stroke="var(--surface-1)" stroke-width="2"
               ${overdue ? 'opacity=".45"' : ''}/>
             <text x="${cx}" y="${cy - 13}" text-anchor="middle" fill="#d6d6dd" font-size="9.5"
               font-family="var(--mono)">${esc(d.module_code)}</text>
@@ -1343,12 +1520,26 @@ async function renderSchedule() {
   }
 
   function bindScheduleActions(dls, mods, topics) {
+    body.querySelectorAll('.open-block-mat').forEach(b => b.addEventListener('click', () =>
+      openMaterial(Number(b.dataset.id), b.dataset.title, b.dataset.path)));
     body.querySelectorAll('.mark').forEach(b => b.addEventListener('click', async () => {
       await api.blocksSetStatus(Number(b.dataset.id), b.dataset.s);
       route();
     }));
+    body.querySelectorAll('.reopen-block').forEach(b => b.addEventListener('click', async () => {
+      await api.blocksSetStatus(Number(b.dataset.id), 'planned');
+      route();
+    }));
+    body.querySelectorAll('.dup-block').forEach(b => b.addEventListener('click', async () => {
+      await api.blocksDuplicate(Number(b.dataset.id));
+      route();
+    }));
     body.querySelectorAll('.del-block').forEach(b => b.addEventListener('click', async () => {
-      if (confirm('Remove this study block?')) {
+      const logged = b.dataset.logged === '1';
+      const msg = logged
+        ? 'Remove this block? Logged study time for it will be removed from today\'s log.'
+        : 'Remove this study block?';
+      if (confirm(msg)) {
         await api.blocksDelete(Number(b.dataset.id));
         route();
       }
