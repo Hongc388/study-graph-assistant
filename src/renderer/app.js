@@ -83,7 +83,14 @@ async function runIngest(root) {
   try {
     const r = await api.ingestRun(typeof root === 'string' ? root : undefined);
     await refreshTree();
-    toastStatus(`Indexed ${r.root.split('/').pop()}: +${r.modules} modules, +${r.materials} files, +${r.topics} topics${r.strategyParsed ? ', strategy.md parsed' : ''}`);
+    const bits = [`+${r.materials} files`, `+${r.topics} topics`];
+    if (r.modules) bits.unshift(`+${r.modules} modules`);
+    if (r.updated) bits.push(`${r.updated} changed`);
+    if (r.removed) bits.push(`${r.removed} removed`);
+    if (r.deadlines) bits.push(`${r.deadlines} exam deadline${r.deadlines > 1 ? 's' : ''} detected`);
+    if (r.spineEdges) bits.push(`${r.spineEdges} spine links`);
+    if (r.strategyParsed) bits.push('strategy.md parsed');
+    toastStatus(`Indexed ${r.root.split('/').pop()}: ${bits.join(', ')}`);
     route();
   } catch (e) {
     tree.innerHTML = `<div class="tree-empty error">${esc(e.message)}</div>`;

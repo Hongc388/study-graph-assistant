@@ -95,6 +95,7 @@ function migrate() {
   addCol('modules', 'exam_pct', 'REAL');
   addCol('materials', 'mtime', 'REAL');
   addCol('materials', 'size', 'INTEGER');
+  addCol('materials', 'seq', 'INTEGER'); // spine position from "01-", "Unit2", …
   // topic_edges gained the 'exam_cluster' kind; SQLite can't alter a CHECK, so
   // rebuild the table once if the old constraint is still in place.
   const ddl = get("SELECT sql FROM sqlite_master WHERE type='table' AND name='topic_edges'")?.sql || '';
@@ -149,9 +150,10 @@ const updateTopic = (t) =>
 const deleteTopic = (id) => run('DELETE FROM topics WHERE id=?', id);
 
 // ---------- materials ----------
+// Spine-numbered files first, in curriculum order; the rest alphabetically.
 const listMaterials = (moduleId) => moduleId
-  ? all('SELECT * FROM materials WHERE module_id=? ORDER BY title', moduleId)
-  : all('SELECT * FROM materials ORDER BY module_id, title');
+  ? all('SELECT * FROM materials WHERE module_id=? ORDER BY (seq IS NULL), seq, title', moduleId)
+  : all('SELECT * FROM materials ORDER BY module_id, (seq IS NULL), seq, title');
 const createMaterial = (m) =>
   run('INSERT INTO materials (module_id, topic_id, path, type, title, due_at) VALUES (?,?,?,?,?,?)',
     m.module_id, m.topic_id || null, m.path || '', m.type || 'lecture', m.title, m.due_at || null).lastInsertRowid;
@@ -227,9 +229,12 @@ function setBlockStatus(id, status) {
 
 // ---------- ingest (idempotent: re-running updates, never duplicates) ----------
 // scan = output of ingest.scanRoot(); strategy = ingest.parseStrategy() or null.
-function applyIngest(scan, strategy) {
+function applyIngest(scan, strategy, opts = {}) {
+  const todayIso = opts.today || new Date().toISOString().slice(0, 10);
   const tx = db.transaction(() => {
-    const stats = { modules: 0, materials: 0, topics: 0, tips: 0 };
+    const stats = { modules: 0, materials: 0, updated: 0, removed: 0,
+                    topics: 0, tips: 0, deadlines: 0, spineEdges: 0 };
+    const scannedPaths = new Set();
     for (const m of scan.modules) {
       let mod = get('SELECT * FROM modules WHERE folder=? OR code=?', m.folder, m.code);
       if (!mod) {
@@ -241,21 +246,56 @@ function applyIngest(scan, strategy) {
         run('UPDATE modules SET folder=?, work=? WHERE id=?', m.folder, m.work, mod.id);
       }
       for (const f of m.files) {
-        const existing = get('SELECT id FROM materials WHERE path=?', f.path);
+        scannedPaths.add(f.path);
+        const existing = get('SELECT id, mtime FROM materials WHERE path=?', f.path);
         if (existing) {
-          run('UPDATE materials SET mtime=?, size=? WHERE id=?', f.mtime, f.size, existing.id);
+          if (existing.mtime !== f.mtime) stats.updated++;
+          run('UPDATE materials SET mtime=?, size=?, seq=? WHERE id=?', f.mtime, f.size, f.seq, existing.id);
         } else {
-          run('INSERT INTO materials (module_id, title, path, type, mtime, size) VALUES (?,?,?,?,?,?)',
-            mod.id, f.name, f.path, classifyLazy(f.name), f.mtime, f.size);
+          run('INSERT INTO materials (module_id, title, path, type, mtime, size, seq) VALUES (?,?,?,?,?,?,?)',
+            mod.id, f.name, f.path, classifyLazy(f.name), f.mtime, f.size, f.seq);
           stats.materials++;
         }
+        // Dated exam paper -> auto deadline with countdown (future dates only;
+        // past papers stay useful as exam-prep material but shouldn't panic the planner).
+        if (f.examDate && f.examDate >= todayIso) {
+          const due = f.examDate + 'T09:00';
+          if (!get('SELECT id FROM deadlines WHERE module_id=? AND due_at=?', mod.id, due)) {
+            run('INSERT INTO deadlines (module_id, title, due_at, weight) VALUES (?,?,?,?)',
+              mod.id, `${m.code} exam (from ${f.name})`, due, 3);
+            stats.deadlines++;
+          }
+        }
       }
+      const topicIdByName = new Map();
       for (const s of m.topicSuggestions) {
-        const dup = get('SELECT id FROM topics WHERE module_id=? AND LOWER(name)=LOWER(?)', mod.id, s.name);
-        if (!dup) {
-          run('INSERT INTO topics (module_id, name, summary) VALUES (?,?,?)',
-            mod.id, s.name, `suggested from ${s.fromFile}`);
+        let t = get('SELECT id FROM topics WHERE module_id=? AND LOWER(name)=LOWER(?)', mod.id, s.name);
+        if (!t) {
+          t = { id: run('INSERT INTO topics (module_id, name, summary) VALUES (?,?,?)',
+            mod.id, s.name, `suggested from ${s.fromFile}`).lastInsertRowid };
           stats.topics++;
+        }
+        topicIdByName.set(s.name, { id: t.id, seq: s.seq });
+      }
+      // Spine ordering: consecutive lecture-numbered topics form a prereq chain
+      // ("01-camera-models" before "02-single-view-metrology"). INSERT OR IGNORE
+      // keeps re-ingests idempotent; users can delete any edge they disagree with.
+      const spine = [...topicIdByName.values()]
+        .filter(t => t.seq != null)
+        .sort((a, b) => a.seq - b.seq);
+      for (let i = 0; i + 1 < spine.length; i++) {
+        const r = run(`INSERT OR IGNORE INTO topic_edges (from_topic, to_topic, kind, note)
+          VALUES (?,?,?,?)`, spine[i].id, spine[i + 1].id, 'prereq', 'lecture order (spine)');
+        if (r.changes) stats.spineEdges++;
+      }
+    }
+    // Diff ingest: drop materials whose file vanished from the library root
+    // (only auto-indexed ones — manual links/notes have paths outside the root).
+    if (scan.root) {
+      for (const row of all("SELECT id, path FROM materials WHERE path LIKE ?", scan.root + '/%')) {
+        if (!scannedPaths.has(row.path)) {
+          run('DELETE FROM materials WHERE id=?', row.id);
+          stats.removed++;
         }
       }
     }

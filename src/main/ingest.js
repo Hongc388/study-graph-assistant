@@ -38,6 +38,28 @@ function classify(filename) {
   return 'lecture';
 }
 
+// Spine position: "01-camera-models.pdf" -> 1, "COMP3001_Unit2_..." -> 2.
+// Lecture-numbered files form the module's guided learning path.
+function seqFromFilename(filename) {
+  let m = filename.match(/^(\d{1,3})[-_. ]/);
+  if (m) return Number(m[1]);
+  m = filename.match(/(?:Unit|Block|Lecture|Week|Chapter)\s*_?(\d+)/i);
+  if (m) return Number(m[1]);
+  return null;
+}
+
+const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+                 jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+
+// "COMP3001_07_May_2026.pdf" -> "2026-05-07" (an exam date to count down to).
+function examDateFromFilename(filename) {
+  const m = filename.match(/(\d{1,2})[_ -](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*[_ -](\d{4})/i);
+  if (!m) return null;
+  const day = String(Number(m[1])).padStart(2, '0');
+  const month = String(MONTHS[m[2].toLowerCase().slice(0, 3)]).padStart(2, '0');
+  return `${m[3]}-${month}-${day}`;
+}
+
 // "08-monocular_depth_estimation.pdf" -> "Monocular Depth Estimation"
 function topicFromFilename(filename) {
   let base = filename.replace(/\.[^.]+$/, '');
@@ -73,7 +95,8 @@ function scanModuleDir(dir) {
         if (!SKIP_DIRS.has(e.name)) walk(full, depth + 1);
       } else if (INDEX_EXTS.has(path.extname(e.name).toLowerCase())) {
         let st; try { st = fs.statSync(full); } catch { continue; }
-        files.push({ path: full, name: e.name, mtime: st.mtimeMs, size: st.size });
+        files.push({ path: full, name: e.name, mtime: st.mtimeMs, size: st.size,
+          seq: seqFromFilename(e.name), examDate: examDateFromFilename(e.name) });
       }
     }
   })(dir, 0);
@@ -82,7 +105,7 @@ function scanModuleDir(dir) {
 
 /** Scan the root. Returns { modules: [{folder, code, name, color, work, files:[...] , topicSuggestions:[...]}], strategyPath } */
 function scanRoot(root) {
-  const out = { modules: [], strategyPath: null };
+  const out = { root, modules: [], strategyPath: null };
   let entries;
   try { entries = fs.readdirSync(root, { withFileTypes: true }); }
   catch (e) { throw new Error(`Cannot read ${root}: ${e.message}`); }
@@ -99,7 +122,10 @@ function scanRoot(root) {
     const topicSuggestions = [];
     for (const f of files) {
       const t = topicFromFilename(f.name);
-      if (t && !seen.has(t.toLowerCase())) { seen.add(t.toLowerCase()); topicSuggestions.push({ name: t, fromFile: f.name }); }
+      if (t && !seen.has(t.toLowerCase())) {
+        seen.add(t.toLowerCase());
+        topicSuggestions.push({ name: t, fromFile: f.name, seq: f.seq });
+      }
     }
     out.modules.push({ folder: e.name, ...known, files, topicSuggestions });
   }
@@ -137,4 +163,4 @@ function parseStrategy(mdPath) {
   return sections;
 }
 
-module.exports = { scanRoot, parseStrategy, classify, KNOWN_MODULES };
+module.exports = { scanRoot, parseStrategy, classify, seqFromFilename, examDateFromFilename, KNOWN_MODULES };
