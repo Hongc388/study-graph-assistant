@@ -1,14 +1,108 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const { pathToFileURL } = require('url');
 const db = require('./db');
 const { planDay } = require('./scheduler');
 const ai = require('./ai');
 const ingest = require('./ingest');
+const { isPreviewable } = require('./preview');
 
-const DEFAULT_ROOT = path.join(app.getPath('home'), 'Desktop', 'year_three');
+const DEFAULT_ROOT = path.join(os.homedir(), 'Desktop', 'year_three');
+const SESSION_IDLE_MS = 15000;
+
+let mainWin = null;
+let previewWin = null;
+let sessionIdleTimer = null;
+let closingPreviewInternally = false;
+
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function sendToRenderer(channel, payload) {
+  if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(channel, payload);
+}
+
+function clearSessionIdleTimer() {
+  if (sessionIdleTimer) { clearTimeout(sessionIdleTimer); sessionIdleTimer = null; }
+}
+
+function scheduleSessionIdleStop(reason = 'idle') {
+  clearSessionIdleTimer();
+  sessionIdleTimer = setTimeout(() => {
+    sessionIdleTimer = null;
+    sendToRenderer('material:session-end', { reason });
+  }, SESSION_IDLE_MS);
+}
+
+function closePreviewWindow() {
+  if (previewWin && !previewWin.isDestroyed()) {
+    closingPreviewInternally = true;
+    previewWin.close();
+  }
+}
+
+function openMaterialPreview(filePath) {
+  closePreviewWindow();
+  const ext = path.extname(filePath).toLowerCase();
+  previewWin = new BrowserWindow({
+    width: 960,
+    height: 720,
+    title: path.basename(filePath),
+    webPreferences: {
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+
+  if (ext === '.pdf' || ext === '.html' || ext === '.htm') {
+    previewWin.loadURL(pathToFileURL(filePath).href);
+  } else {
+    let text;
+    try { text = fs.readFileSync(filePath, 'utf8'); }
+    catch { shell.openPath(filePath); return { mode: 'external' }; }
+    const body = `<pre style="white-space:pre-wrap;font-family:ui-monospace,monospace;padding:20px;line-height:1.5;color:#d6d6dd;background:#1a1a1e;margin:0">${escHtml(text)}</pre>`;
+    previewWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(
+      `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escHtml(path.basename(filePath))}</title></head><body>${body}</body></html>`)}`);
+  }
+
+  previewWin.on('focus', () => {
+    clearSessionIdleTimer();
+    sendToRenderer('material:preview-focus');
+  });
+  previewWin.on('blur', () => {
+    sendToRenderer('material:preview-blur');
+    scheduleSessionIdleStop('preview-idle');
+  });
+  previewWin.on('closed', () => {
+    previewWin = null;
+    clearSessionIdleTimer();
+    if (!closingPreviewInternally) {
+      sendToRenderer('material:session-end', { reason: 'preview-closed' });
+    }
+    closingPreviewInternally = false;
+  });
+  previewWin.once('ready-to-show', () => {
+    previewWin.focus();
+    clearSessionIdleTimer();
+    sendToRenderer('material:preview-focus');
+  });
+  return { mode: 'preview' };
+}
+
+function openMaterial(filePath) {
+  if (!filePath || filePath.startsWith('http')) return { mode: 'none' };
+  if (!fs.existsSync(filePath)) return { mode: 'none' };
+  if (isPreviewable(filePath)) return openMaterialPreview(filePath);
+  shell.openPath(filePath);
+  return { mode: 'external' };
+}
 
 function createWindow() {
-  const win = new BrowserWindow({
+  mainWin = new BrowserWindow({
     width: 1280,
     height: 840,
     title: 'Study Graph Assistant',
@@ -18,7 +112,8 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
-  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  mainWin.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  mainWin.on('closed', () => { mainWin = null; closePreviewWindow(); });
 }
 
 app.whenReady().then(() => {
@@ -90,6 +185,8 @@ function registerIpc() {
     'deadlines:delete': (_, id) => db.deleteDeadline(id),
     // schedule
     'blocks:list': (_, date) => db.listBlocks(date),
+    'blocks:create': (_, b) => { db.createBlock(b); return db.listBlocks(b.date); },
+    'blocks:delete': (_, id) => db.deleteBlock(id),
     'blocks:setStatus': (_, id, status) => db.setBlockStatus(id, status),
     'plan:generate': (_, { date, windows }) => {
       const plan = planDay({
@@ -129,8 +226,9 @@ function registerIpc() {
     'problems:delete': (_, id) => db.deleteProblem(id),
     'problems:queue': (_, limit) => db.listProblemQueue(limit ?? 80),
     'sessions:create': (_, s) => db.createMaterialSession(s),
-    // open a material with the OS default app (Preview, etc.)
-    'materials:open': (_, p) => shell.openPath(p),
+    // open a material with an in-app preview (pdf/md/txt) or the OS default app
+    'materials:open': (_, p) => openMaterial(p),
+    'materials:closePreview': () => { closePreviewWindow(); },
     // settings
     'settings:get': (_, key) => db.getSetting(key),
     'settings:set': (_, key, value) => db.setSetting(key, value),

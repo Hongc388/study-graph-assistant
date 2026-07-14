@@ -320,6 +320,7 @@ const clearPlannedBlocks = (date) =>
 const createBlock = (b) =>
   run('INSERT INTO study_blocks (date, start_min, end_min, topic_id, material_id, reason) VALUES (?,?,?,?,?,?)',
     b.date, b.start_min, b.end_min, b.topic_id, b.material_id || null, b.reason || '').lastInsertRowid;
+const deleteBlock = (id) => run('DELETE FROM study_blocks WHERE id=?', id);
 
 // Marking a block done logs TIME (a fact), never a mastery bump (an opinion) —
 // mastery only moves when problems get solved or exposure accumulates.
@@ -457,7 +458,7 @@ module.exports = {
   listMaterials, createMaterial, updateMaterial, deleteMaterial, searchMaterials,
   listEdges, createEdge, deleteEdge,
   listDeadlines, createDeadline, updateDeadline, deleteDeadline,
-  listBlocks, clearPlannedBlocks, createBlock, setBlockStatus,
+  listBlocks, clearPlannedBlocks, createBlock, deleteBlock, setBlockStatus,
   listProblems, createProblem, updateProblem, deleteProblem, createMaterialSession,
   applyIngest, listModuleNotes,
   getSetting, setSetting,

@@ -4,6 +4,7 @@ const view = document.getElementById('view');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmtMin = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const toMin = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; };
 const today = () => new Date().toISOString().slice(0, 10);
 
 const MATERIAL_TYPES = ['lecture', 'assignment', 'exam-prep', 'paper', 'lab', 'cheatsheet', 'notes'];
@@ -15,18 +16,38 @@ const routes = {
   module: renderModule,       // #/module/<id>
   graph: renderGraph_,
   queue: renderQueue,
-  today: renderToday,
-  deadlines: renderDeadlines,
+  schedule: renderSchedule,   // #/schedule/today | timeline | calendar | list
+  today: renderSchedule,      // alias → today tab
+  deadlines: renderSchedule,  // alias → list tab (or timeline from settings)
   settings: renderSettings,
 };
 let currentModuleId = null;
+let scheduleTab = 'today';     // today | timeline | calendar | list
 async function route() {
-  const [name, arg] = location.hash.replace(/^#\//, '').split('/');
+  const parts = location.hash.replace(/^#\//, '').split('/');
+  let name = parts[0] || 'dashboard';
+  const arg = parts[1];
+  // schedule aliases
+  if (name === 'today') { name = 'schedule'; scheduleTab = 'today'; }
+  else if (name === 'deadlines') {
+    name = 'schedule';
+    if (arg && ['timeline', 'calendar', 'list'].includes(arg)) scheduleTab = arg;
+    else {
+      const persisted = await api.settingsGet('deadline_view');
+      scheduleTab = persisted && ['timeline', 'calendar', 'list'].includes(persisted) ? persisted : 'timeline';
+    }
+  } else if (name === 'schedule') {
+    scheduleTab = arg && ['today', 'timeline', 'calendar', 'list'].includes(arg) ? arg : 'today';
+  }
   const fn = routes[name] || renderDashboard;
   const active = routes[name] ? name : 'dashboard';
-  document.querySelectorAll('.act').forEach(a =>
-    a.classList.toggle('active', a.dataset.view === active
-      || (name === 'module' && a.dataset.view === 'dashboard')));
+  document.querySelectorAll('.act').forEach(a => {
+    const v = a.dataset.view;
+    const on = v === 'today' ? (name === 'schedule' && scheduleTab === 'today')
+      : v === 'deadlines' ? (name === 'schedule' && scheduleTab !== 'today')
+      : v === active || (name === 'module' && v === 'dashboard');
+    a.classList.toggle('active', on);
+  });
   if (name === 'module') currentModuleId = Number(arg);
   view.innerHTML = '<p class="muted">Loading…</p>';
   await fn(arg);
@@ -100,37 +121,94 @@ async function runIngest(root) {
 }
 
 // ---------- material timer (time ledger) ----------
-// Opening a material starts a timer; stopping it logs a material_session.
-// Starting a new one auto-logs the previous (if >= 1 minute).
-let timer = null; // { materialId, title, startedMs, tick }
-function openMaterial(materialId, title, path) {
-  if (path && !path.startsWith('http')) api.materialsOpen(path);
-  startTimer(materialId, title);
+// Opening a material starts a timer; it only counts while the file preview
+// window is focused — not while you're browsing the main app.
+const TIMER_IDLE_MS = 15000;
+let timer = null; // { materialId, title, mode, activeMs, lastTickMs, paused, tick }
+let mainFocused = document.hasFocus();
+let previewFocused = false;
+let idleStopTimer = null;
+
+function timerElapsedMs() {
+  return TimerState.elapsedMs(timer);
 }
-async function startTimer(materialId, title) {
+
+function isTimerActive() {
+  return TimerState.isTimerActive(timer, { previewFocused });
+}
+
+function clearIdleStop() {
+  if (idleStopTimer) { clearTimeout(idleStopTimer); idleStopTimer = null; }
+}
+
+function scheduleIdleStop() {
+  clearIdleStop();
+  idleStopTimer = setTimeout(() => stopTimer(), TIMER_IDLE_MS);
+}
+
+function syncTimerActivity() {
+  if (!timer) return;
+  const active = TimerState.isTimerActive(timer, { previewFocused });
+  timer = TimerState.applyActivitySync(timer, active) || timer;
+  if (active) clearIdleStop();
+  else if (timer.paused) scheduleIdleStop();
+  renderTimerDisplay();
+}
+
+function renderTimerDisplay() {
+  const el = document.getElementById('st-timer');
+  if (!timer) { el.hidden = true; return; }
+  el.hidden = false;
+  const ms = timerElapsedMs();
+  const min = Math.floor(ms / 60000);
+  const sec = Math.floor((ms % 60000) / 1000);
+  const paused = timer.paused
+    ? (timer.mode === 'external'
+      ? ' <span class="muted">paused (external app — no file focus tracking)</span>'
+      : ' <span class="muted">paused</span>')
+    : '';
+  el.innerHTML = `⏱ ${min}:${String(sec).padStart(2, '0')} ${esc(timer.title.slice(0, 28))}${paused} <a href="#" id="st-timer-stop" style="color:var(--danger)">■ stop</a>`;
+  el.querySelector('#st-timer-stop').onclick = (e) => { e.preventDefault(); stopTimer(); };
+}
+
+async function openMaterial(materialId, title, path) {
+  let mode = 'none';
+  if (path && !path.startsWith('http')) {
+    const r = await api.materialsOpen(path);
+    mode = r?.mode || 'external';
+  }
+  startTimer(materialId, title, mode);
+}
+
+async function startTimer(materialId, title, mode = 'none') {
   if (!materialId) return;
   await stopTimer(true);
-  timer = { materialId, title, startedMs: Date.now() };
-  const el = document.getElementById('st-timer');
-  el.hidden = false;
-  const render = () => {
-    if (!timer) return;
-    const min = Math.floor((Date.now() - timer.startedMs) / 60000);
-    const sec = Math.floor(((Date.now() - timer.startedMs) % 60000) / 1000);
-    el.innerHTML = `⏱ ${min}:${String(sec).padStart(2, '0')} ${esc(timer.title.slice(0, 28))} <a href="#" id="st-timer-stop" style="color:var(--danger)">■ stop</a>`;
-    el.querySelector('#st-timer-stop').onclick = (e) => { e.preventDefault(); stopTimer(); };
+  previewFocused = false;
+  timer = {
+    materialId,
+    title,
+    mode,
+    activeMs: 0,
+    lastTickMs: Date.now(),
+    paused: true, // waits for file preview focus (or stays paused for external)
   };
-  render();
-  timer.tick = setInterval(render, 1000);
+  renderTimerDisplay();
+  timer.tick = setInterval(renderTimerDisplay, 1000);
+  syncTimerActivity();
 }
+
 async function stopTimer(silent = false) {
   if (!timer) return;
   clearInterval(timer.tick);
-  const minutes = Math.round((Date.now() - timer.startedMs) / 60000);
-  const { materialId, title } = timer;
+  clearIdleStop();
+  if (!timer.paused) timer.activeMs += Date.now() - timer.lastTickMs;
+  const minutes = Math.round(timer.activeMs / 60000);
+  const { materialId, title, mode } = timer;
   timer = null;
+  previewFocused = false;
   const el = document.getElementById('st-timer');
   el.hidden = true;
+  if (mode === 'preview') await api.materialsClosePreview();
   if (minutes >= 1) {
     await api.sessionsCreate({ material_id: materialId, duration_min: minutes, source: 'timer' });
     if (!silent) toastStatus(`logged ${minutes}m on ${title.slice(0, 30)}`);
@@ -138,6 +216,16 @@ async function stopTimer(silent = false) {
     toastStatus('timer under a minute — not logged');
   }
 }
+
+window.addEventListener('focus', () => { mainFocused = true; if (timer?.mode !== 'preview') syncTimerActivity(); });
+window.addEventListener('blur', () => { mainFocused = false; if (timer?.mode !== 'preview') syncTimerActivity(); });
+document.addEventListener('visibilitychange', () => {
+  mainFocused = !document.hidden && document.hasFocus();
+  if (timer?.mode !== 'preview') syncTimerActivity();
+});
+api.onMaterialSessionEnd(() => stopTimer());
+api.onPreviewFocus(() => { previewFocused = true; syncTimerActivity(); });
+api.onPreviewBlur(() => { previewFocused = false; syncTimerActivity(); });
 
 // ---------- status bar ----------
 async function refreshStatus() {
@@ -169,10 +257,10 @@ async function paletteCommands() {
   const mods = await api.modulesList();
   const cmds = [
     { icon: '⟳', label: 'Index year_three (re-scan library)', run: () => runIngest() },
-    { icon: '▸', label: 'Plan today', run: () => { location.hash = '#/today'; } },
+    { icon: '▸', label: "Today's schedule", run: () => { location.hash = '#/schedule/today'; } },
     { icon: '▤', label: 'Problem queue', run: () => { location.hash = '#/queue'; } },
     { icon: '◉', label: 'Open topic graph', run: () => { location.hash = '#/graph'; } },
-    { icon: '◷', label: 'Show deadlines', run: () => { location.hash = '#/deadlines'; } },
+    { icon: '◷', label: 'Show deadlines', run: () => { location.hash = '#/schedule/timeline'; } },
     { icon: '▽', label: 'Show weak topics', run: showWeakTopics },
     { icon: '⌂', label: 'Change library root…', run: async () => {
         const p = await api.ingestPickRoot(); if (p) runIngest(p); } },
@@ -332,7 +420,7 @@ async function renderDashboard() {
           <span class="dot" style="background:${esc(d.module_color)}"></span>
           ${esc(d.module_code)} · ${esc(d.title)} · <b>${d.days}d</b></span>`).join('')}
       </div>
-      <p class="muted" style="margin:8px 0 0">Planner boosts unsolved problems in these modules for the next 14 days.</p>
+      <p class="muted" style="margin:8px 0 0">Problem queue prioritizes unsolved work in these modules for the next 14 days.</p>
     </div>` : ''}
     <div class="row" style="justify-content:space-between">
       <h2>Modules</h2>
@@ -833,127 +921,160 @@ async function renderGraph_() {
   });
 }
 
-// ---------- Today plan ----------
-async function renderToday() {
-  const date = today();
-  const blocks = await api.blocksList(date);
-  const savedWindows = JSON.parse(await api.settingsGet('windows') || '[["18:00","21:00"]]');
+// ---------- Schedule (today plan + deadlines) ----------
+let calCursor = null;    // 'YYYY-MM' shown by the calendar
 
-  view.innerHTML = `
-    <h2>Today — <span class="mono">${date}</span></h2>
-    <div class="panel">
-      <h3 style="margin-top:0">Available time</h3>
-      <div id="windows">${savedWindows.map(w => windowRow(w)).join('')}</div>
-      <div class="row" style="margin-top:8px">
-        <button id="add-window" class="small">+ Window</button>
-        <button id="gen" class="primary">Generate today's plan</button>
-        <span class="muted">Respects prerequisites, weighs deadlines × weakness × exam %, interleaves cross-module review.</span>
-      </div>
-    </div>
-    <div id="plan">${blocks.map(blockHtml).join('') || '<p class="muted">No plan yet — set your windows and generate.</p>'}</div>`;
+function schedTableOpen() {
+  return `<table class="sched-table"><thead><tr>
+    <th>Type</th><th>When</th><th>Module</th><th>Item</th><th>Detail</th><th>Status</th><th></th>
+  </tr></thead><tbody>`;
+}
+function schedTableClose() { return '</tbody></table>'; }
 
-  function windowRow(w) {
-    return `<div class="row" style="margin-bottom:6px">
-      <input type="time" class="w-start" value="${w[0]}"> →
-      <input type="time" class="w-end" value="${w[1]}">
-      <button class="danger-ghost small del-window">✕</button></div>`;
-  }
-  function blockHtml(b) {
-    return `<div class="panel block ${b.status}">
-      <div class="time">${fmtMin(b.start_min)}–${fmtMin(b.end_min)}</div>
-      <div style="flex:1">
-        <b><span class="dot" style="background:${esc(b.module_color || '#999')}"></span>
-        ${esc(b.module_code || '')} ${esc(b.topic_name || '(topic removed)')}</b>
-        ${b.material_title ? `<span class="chip">${esc(b.material_title)}</span>` : ''}
-        <div class="why">${esc(b.reason)}</div>
-      </div>
-      <div class="row">
-        ${b.status === 'planned'
-          ? `<button class="small mark" data-id="${b.id}" data-s="done">Done</button>
-             <button class="small mark" data-id="${b.id}" data-s="skipped">Skip</button>`
-          : `<span class="chip">${esc(b.status)}</span>`}
-      </div></div>`;
-  }
-
-  const windowsEl = view.querySelector('#windows');
-  view.querySelector('#add-window').addEventListener('click', () => {
-    windowsEl.insertAdjacentHTML('beforeend', windowRow(['09:00', '10:30']));
-    bindDel();
-  });
-  function bindDel() {
-    windowsEl.querySelectorAll('.del-window').forEach(b =>
-      b.onclick = () => b.parentElement.remove());
-  }
-  bindDel();
-
-  view.querySelector('#gen').addEventListener('click', async () => {
-    const rows = [...windowsEl.children];
-    const wins = rows.map(r => [r.querySelector('.w-start').value, r.querySelector('.w-end').value])
-      .filter(w => w[0] && w[1] && w[0] < w[1]);
-    if (!wins.length) return alert('Add at least one valid time window.');
-    await api.settingsSet('windows', JSON.stringify(wins));
-    const toMin = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h * 60 + m; };
-    await api.planGenerate({ date, windows: wins.map(w => ({ start_min: toMin(w[0]), end_min: toMin(w[1]) })) });
-    route();
-  });
-
-  view.querySelectorAll('.mark').forEach(b => b.addEventListener('click', async () => {
-    await api.blocksSetStatus(Number(b.dataset.id), b.dataset.s);
-    route();
-  }));
+function planRowHtml(b) {
+  const faded = b.status !== 'planned' ? ' style="opacity:.45"' : '';
+  const actions = b.status === 'planned'
+    ? `<button class="small mark" data-id="${b.id}" data-s="done">Done</button>
+       <button class="small mark" data-id="${b.id}" data-s="skipped">Skip</button>
+       <button class="danger-ghost small del-block" data-id="${b.id}">✕</button>`
+    : '';
+  return `<tr class="sched-row sched-study"${faded}>
+    <td><span class="chip">study</span></td>
+    <td class="mono" style="white-space:nowrap">${fmtMin(b.start_min)}–${fmtMin(b.end_min)}</td>
+    <td><span class="dot" style="background:${esc(b.module_color || '#999')}"></span>${esc(b.module_code || '')}</td>
+    <td><b>${esc(b.topic_name || '(topic removed)')}</b>
+      ${b.material_title ? `<span class="chip">${esc(b.material_title)}</span>` : ''}</td>
+    <td class="muted">${esc(b.reason)}</td>
+    <td><span class="chip">${esc(b.status)}</span></td>
+    <td style="text-align:right; white-space:nowrap">${actions}</td>
+  </tr>`;
 }
 
-// ---------- Deadlines ----------
-let dlView = null;       // 'list' | 'timeline' | 'calendar' (persisted)
-let calCursor = null;    // 'YYYY-MM' shown by the calendar
-async function renderDeadlines() {
-  const [dls, mods, topics] = await Promise.all([api.deadlinesList(), api.modulesList(), api.topicsList()]);
-  if (dlView === null) dlView = (await api.settingsGet('deadline_view')) || 'timeline';
+function deadlineRowHtml(d, topics, { showCountdown = true } = {}) {
+  const topic = topics.find(t => t.id === d.topic_id)?.name || 'whole module';
+  const days = Math.ceil((new Date(d.due_at).getTime() - Date.now()) / 86400000);
+  let when = esc(d.due_at.slice(0, 16).replace('T', ' '));
+  if (showCountdown) {
+    const tag = days < 0 ? `${Math.abs(days)}d overdue`
+      : days === 0 ? 'today' : days <= 7 ? `${days}d` : `${days}d`;
+    const cls = days < 0 || days <= 7 ? 'error' : days <= 21 ? '' : 'muted';
+    when += ` <span class="${cls}" style="font-weight:700">(${tag})</span>`;
+  }
+  return `<tr class="sched-row sched-due" style="${d.done ? 'opacity:.45' : ''}">
+    <td><span class="chip">due</span></td>
+    <td class="mono" style="white-space:nowrap">${when}</td>
+    <td><span class="dot" style="background:${esc(d.module_color)}"></span>${esc(d.module_code)}</td>
+    <td><b>${esc(d.title)}</b></td>
+    <td class="muted">weight ${d.weight} · ${esc(topic)}</td>
+    <td><span class="chip">${d.done ? 'done' : 'open'}</span></td>
+    <td style="text-align:right; white-space:nowrap">
+      <button class="small toggle-dl" data-id="${d.id}">${d.done ? 'Reopen' : 'Done'}</button>
+      <button class="danger-ghost small del-dl" data-id="${d.id}">✕</button>
+    </td>
+  </tr>`;
+}
+
+async function promptStudyBlock(date, topics, mods, materials) {
+  if (!topics.length) return alert('Add topics in a module first.');
+  const modCode = (id) => mods.find(m => m.id === id)?.code || '?';
+  const topicOptions = [...topics]
+    .sort((a, b) => modCode(a.module_id).localeCompare(modCode(b.module_id)) || a.name.localeCompare(b.name))
+    .map(t => ({ value: t.id, label: `${modCode(t.module_id)} — ${t.name}` }));
+  const matOptions = [{ value: '', label: '(none)' },
+    ...materials.map(m => ({
+      value: m.id,
+      label: `${modCode(m.module_id)} · ${m.title}`,
+    }))];
+  const d = await formDialog('Add study block', [
+    { name: 'start', label: 'Start', type: 'time', value: '18:00' },
+    { name: 'end', label: 'End', type: 'time', value: '19:30' },
+    { name: 'topic_id', label: 'Topic', type: 'select', options: topicOptions },
+    { name: 'material_id', label: 'Material (optional)', type: 'select', options: matOptions },
+    { name: 'reason', label: 'Note (optional)' },
+  ], 'Add');
+  if (!d) return;
+  const start_min = toMin(d.start);
+  const end_min = toMin(d.end);
+  if (!d.start || !d.end || end_min <= start_min) return alert('End must be after start.');
+  await api.blocksCreate({
+    date,
+    start_min,
+    end_min,
+    topic_id: Number(d.topic_id),
+    material_id: d.material_id ? Number(d.material_id) : null,
+    reason: d.reason.trim(),
+  });
+  route();
+}
+
+async function renderSchedule() {
+  const date = today();
+  const [blocks, dls, mods, topics, materials] = await Promise.all([
+    api.blocksList(date),
+    api.deadlinesList(),
+    api.modulesList(),
+    api.topicsList(),
+    api.materialsList(),
+  ]);
+
+  const tabs = [
+    ['today', 'Today plan'],
+    ['timeline', 'Timeline'],
+    ['calendar', 'Calendar'],
+    ['list', 'Deadlines'],
+  ];
 
   view.innerHTML = `
-    <div class="row" style="justify-content:space-between">
-      <h2>Deadlines</h2>
+    <div class="row" style="justify-content:space-between; align-items:center">
+      <h2>Schedule${scheduleTab === 'today' ? ` — <span class="mono">${date}</span>` : ''}</h2>
       <div class="row">
         <div class="seg" role="tablist">
-          ${['timeline', 'calendar', 'list'].map(v =>
-            `<button class="seg-btn ${dlView === v ? 'on' : ''}" data-v="${v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}
+          ${tabs.map(([v, label]) =>
+            `<button class="seg-btn ${scheduleTab === v ? 'on' : ''}" data-tab="${v}">${label}</button>`).join('')}
         </div>
-        <button id="add-dl" class="primary">+ Deadline</button>
+        ${scheduleTab === 'list' ? '<button id="add-dl" class="primary">+ Deadline</button>' : ''}
+        ${scheduleTab === 'today' ? '<button id="add-block" class="primary">+ Study block</button>' : ''}
       </div>
     </div>
-    <div id="dl-body"></div>`;
+    <div id="sched-body"></div>`;
+
   view.querySelectorAll('.seg-btn').forEach(b => b.addEventListener('click', async () => {
-    dlView = b.dataset.v;
-    await api.settingsSet('deadline_view', dlView);
-    route();
+    scheduleTab = b.dataset.tab;
+    if (scheduleTab !== 'today') await api.settingsSet('deadline_view', scheduleTab);
+    location.hash = `#/schedule/${scheduleTab}`;
   }));
 
-  const body = view.querySelector('#dl-body');
-  if (dlView === 'timeline') body.innerHTML = timelineHtml(dls);
-  else if (dlView === 'calendar') body.innerHTML = calendarHtml(dls);
-  else body.innerHTML = listHtml(dls, topics);
-  if (dlView === 'calendar') bindCalendarNav();
-  bindDlTooltips(dls);
-  bindListButtons();
+  const body = view.querySelector('#sched-body');
 
-  // ----- List -----
-  function listHtml(dls, topics) {
-    return `<table><thead><tr><th>Due</th><th>Module</th><th>Title</th><th>Weight</th><th>Topic</th><th></th></tr></thead>
-    <tbody>
-      ${dls.map(d => `<tr style="${d.done ? 'opacity:.45' : ''}">
-        <td class="mono" style="white-space:nowrap">${esc(d.due_at.slice(0, 16).replace('T', ' '))}</td>
-        <td><span class="dot" style="background:${esc(d.module_color)}"></span>${esc(d.module_code)}</td>
-        <td><b>${esc(d.title)}</b></td>
-        <td>${d.weight}</td>
-        <td class="muted">${esc(topics.find(t => t.id === d.topic_id)?.name || 'whole module')}</td>
-        <td style="text-align:right; white-space:nowrap">
-          <button class="small toggle-dl" data-id="${d.id}">${d.done ? 'Reopen' : 'Done'}</button>
-          <button class="danger-ghost small del-dl" data-id="${d.id}">✕</button></td>
-      </tr>`).join('') || '<tr><td colspan="6" class="muted">No deadlines.</td></tr>'}
-    </tbody></table>`;
+  if (scheduleTab === 'today') {
+    const openDls = dls.filter(d => !d.done).sort((a, b) => a.due_at.localeCompare(b.due_at));
+    const planRows = blocks.length
+      ? blocks.map(planRowHtml).join('')
+      : '<tr><td colspan="7" class="muted">No blocks yet — use + Study block to plan your day.</td></tr>';
+    const dlRows = openDls.length
+      ? `<tr class="sched-sep"><td colspan="7"><b>Upcoming deadlines</b></td></tr>`
+        + openDls.map(d => deadlineRowHtml(d, topics)).join('')
+      : '';
+
+    body.innerHTML = schedTableOpen() + planRows + dlRows + schedTableClose();
+    view.querySelector('#add-block')?.addEventListener('click', () =>
+      promptStudyBlock(date, topics, mods, materials));
+  } else if (scheduleTab === 'list') {
+    const rows = dls.length
+      ? dls.map(d => deadlineRowHtml(d, topics, { showCountdown: true })).join('')
+      : '<tr><td colspan="7" class="muted">No deadlines.</td></tr>';
+    body.innerHTML = schedTableOpen() + rows + schedTableClose();
+  } else if (scheduleTab === 'timeline') {
+    body.innerHTML = timelineHtml(dls);
+  } else if (scheduleTab === 'calendar') {
+    body.innerHTML = calendarHtml(dls);
+    bindCalendarNav();
   }
 
-  // ----- Timeline: one line, every deadline a dot, soonest first -----
+  bindScheduleActions(dls, mods, topics);
+  if (scheduleTab === 'timeline' || scheduleTab === 'calendar') bindDlTooltips(dls);
+
+  // ----- Timeline -----
   function timelineHtml(dls) {
     const open = dls.filter(d => !d.done).sort((a, b) => a.due_at.localeCompare(b.due_at));
     if (!open.length) return '<p class="muted">No open deadlines — the timeline is clear.</p>';
@@ -964,14 +1085,12 @@ async function renderDeadlines() {
     const W = 920, H = 190, PAD = 40, AXIS_Y = 118;
     const x = (t) => PAD + (t - t0) / (t1 - t0) * (W - 2 * PAD);
 
-    // month ticks
     const ticks = [];
     const d0 = new Date(t0); d0.setDate(1); d0.setMonth(d0.getMonth() + 1);
     for (let d = d0; d.getTime() < t1; d.setMonth(d.getMonth() + 1)) {
       ticks.push({ t: d.getTime(), label: d.toLocaleString('en', { month: 'short' }) });
     }
 
-    // stack same/close dates upward so dots never overlap
     const placed = [];
     const dots = open.map((d, i) => {
       const t = new Date(d.due_at).getTime();
@@ -1006,18 +1125,17 @@ async function renderDeadlines() {
               font-weight="700">${overdue ? 'overdue' : days === 0 ? 'today' : days + 'd'}</text>
           </g>`).join('')}
       </svg>
-      <p class="muted" style="margin-top:6px">Dot size = weight · label = days left · hover a dot for details.
-        Soonest is leftmost.</p>
+      <p class="muted" style="margin-top:6px">Dot size = weight · label = days left · hover a dot for details. Soonest is leftmost.</p>
     </div>
     <div id="dl-tip" class="dl-tip" hidden></div>`;
   }
 
-  // ----- Calendar: month grid -----
+  // ----- Calendar -----
   function calendarHtml(dls) {
     if (!calCursor) calCursor = today().slice(0, 7);
     const [Y, M] = calCursor.split('-').map(Number);
     const first = new Date(Y, M - 1, 1);
-    const startDow = (first.getDay() + 6) % 7; // Monday-first
+    const startDow = (first.getDay() + 6) % 7;
     const daysInMonth = new Date(Y, M, 0).getDate();
     const byDay = new Map();
     for (const d of dls) {
@@ -1054,6 +1172,7 @@ async function renderDeadlines() {
     </div>
     <div id="dl-tip" class="dl-tip" hidden></div>`;
   }
+
   function bindCalendarNav() {
     const shift = (n) => {
       const [Y, M] = calCursor.split('-').map(Number);
@@ -1061,14 +1180,13 @@ async function renderDeadlines() {
       calCursor = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       route();
     };
-    view.querySelector('#cal-prev').addEventListener('click', () => shift(-1));
-    view.querySelector('#cal-next').addEventListener('click', () => shift(1));
-    view.querySelector('#cal-today').addEventListener('click', () => { calCursor = today().slice(0, 7); route(); });
+    body.querySelector('#cal-prev').addEventListener('click', () => shift(-1));
+    body.querySelector('#cal-next').addEventListener('click', () => shift(1));
+    body.querySelector('#cal-today').addEventListener('click', () => { calCursor = today().slice(0, 7); route(); });
   }
 
-  // shared hover tooltip for timeline dots and calendar chips
   function bindDlTooltips(dls) {
-    const tip = view.querySelector('#dl-tip');
+    const tip = body.querySelector('#dl-tip');
     if (!tip) return;
     const show = (el, d) => {
       const days = Math.ceil((new Date(d.due_at).getTime() - Date.now()) / 86400000);
@@ -1081,38 +1199,50 @@ async function renderDeadlines() {
       tip.style.left = Math.min(r.left, window.innerWidth - 240) + 'px';
       tip.style.top = (r.bottom + 8) + 'px';
     };
-    view.querySelectorAll('.dl-dot, .cal-chip').forEach(el => {
+    body.querySelectorAll('.dl-dot, .cal-chip').forEach(el => {
       el.addEventListener('mouseenter', () => show(el, dls[Number(el.dataset.i)]));
       el.addEventListener('mouseleave', () => { tip.hidden = true; });
     });
   }
 
-  function bindListButtons() {
-  view.querySelector('#add-dl').addEventListener('click', async () => {
-    if (!mods.length) return alert('Create a module first.');
-    const d = await formDialog('New deadline', [
-      { name: 'title', label: 'Title (e.g. Assignment 2, Midterm)' },
-      { name: 'module_id', label: 'Module', type: 'select',
-        options: mods.map(m => ({ value: m.id, label: `${m.code} ${m.name}` })) },
-      { name: 'topic_id', label: 'Topic (optional — else whole module is urgent)', type: 'select',
-        options: [{ value: '', label: '(whole module)' },
-          ...topics.map(t => ({ value: t.id, label: t.name }))] },
-      { name: 'due_at', label: 'Due', type: 'datetime-local' },
-      { name: 'weight', label: 'Weight (exam 3, assignment 2, quiz 1)', type: 'number', step: '0.5', min: 0.5, value: 1 },
-    ], 'Add');
-    if (d && d.title.trim() && d.due_at) {
-      await api.deadlinesCreate({ ...d, module_id: Number(d.module_id),
-        topic_id: d.topic_id ? Number(d.topic_id) : null, weight: Number(d.weight) });
+  function bindScheduleActions(dls, mods, topics) {
+    body.querySelectorAll('.mark').forEach(b => b.addEventListener('click', async () => {
+      await api.blocksSetStatus(Number(b.dataset.id), b.dataset.s);
       route();
-    }
-  });
-  view.querySelectorAll('.toggle-dl').forEach(b => b.addEventListener('click', async () => {
-    const d = dls.find(x => x.id === Number(b.dataset.id));
-    await api.deadlinesUpdate({ ...d, done: !d.done }); route();
-  }));
-  view.querySelectorAll('.del-dl').forEach(b => b.addEventListener('click', async () => {
-    if (confirm('Delete deadline?')) { await api.deadlinesDelete(Number(b.dataset.id)); route(); }
-  }));
+    }));
+    body.querySelectorAll('.del-block').forEach(b => b.addEventListener('click', async () => {
+      if (confirm('Remove this study block?')) {
+        await api.blocksDelete(Number(b.dataset.id));
+        route();
+      }
+    }));
+    body.querySelectorAll('.toggle-dl').forEach(b => b.addEventListener('click', async () => {
+      const d = dls.find(x => x.id === Number(b.dataset.id));
+      await api.deadlinesUpdate({ ...d, done: !d.done });
+      route();
+    }));
+    body.querySelectorAll('.del-dl').forEach(b => b.addEventListener('click', async () => {
+      if (confirm('Delete deadline?')) { await api.deadlinesDelete(Number(b.dataset.id)); route(); }
+    }));
+    const addBtn = view.querySelector('#add-dl');
+    if (addBtn) addBtn.addEventListener('click', async () => {
+      if (!mods.length) return alert('Create a module first.');
+      const d = await formDialog('New deadline', [
+        { name: 'title', label: 'Title (e.g. Assignment 2, Midterm)' },
+        { name: 'module_id', label: 'Module', type: 'select',
+          options: mods.map(m => ({ value: m.id, label: `${m.code} ${m.name}` })) },
+        { name: 'topic_id', label: 'Topic (optional — else whole module is urgent)', type: 'select',
+          options: [{ value: '', label: '(whole module)' },
+            ...topics.map(t => ({ value: t.id, label: t.name }))] },
+        { name: 'due_at', label: 'Due', type: 'datetime-local' },
+        { name: 'weight', label: 'Weight (exam 3, assignment 2, quiz 1)', type: 'number', step: '0.5', min: 0.5, value: 1 },
+      ], 'Add');
+      if (d && d.title.trim() && d.due_at) {
+        await api.deadlinesCreate({ ...d, module_id: Number(d.module_id),
+          topic_id: d.topic_id ? Number(d.topic_id) : null, weight: Number(d.weight) });
+        route();
+      }
+    });
   }
 }
 
