@@ -244,6 +244,10 @@ function applyIngest(scan, strategy, opts = {}) {
         stats.modules++;
       } else {
         run('UPDATE modules SET folder=?, work=? WHERE id=?', m.folder, m.work, mod.id);
+        // refresh color only if the stored one is a legacy default (not user-picked)
+        if (require('./ingest').LEGACY_DEFAULT_COLORS.has(mod.color)) {
+          run('UPDATE modules SET color=? WHERE id=?', m.color, mod.id);
+        }
       }
       for (const f of m.files) {
         scannedPaths.add(f.path);

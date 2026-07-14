@@ -175,6 +175,40 @@ label { font-size: 11px; color: var(--muted); display: block; margin-bottom: 3px
 .legend .l-analogy::before { color: var(--violet); }
 .legend .l-exam::before { color: var(--danger); }
 
+/* segmented view switcher */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.seg-btn { border: none; border-radius: 0; background: var(--surface); padding: 5px 13px; }
+.seg-btn + .seg-btn { border-left: 1px solid var(--line); }
+.seg-btn.on { background: #26263a; color: var(--ink-bright); }
+
+/* deadline calendar */
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-head { text-align: center; font-size: 10.5px; color: var(--muted); padding: 2px 0;
+  text-transform: uppercase; letter-spacing: .05em; }
+.cal-cell {
+  min-height: 76px; background: var(--surface-2); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 5px; font-size: 11px; overflow: hidden;
+}
+.cal-cell.off { background: transparent; border-color: transparent; }
+.cal-cell.today { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.cal-day { color: var(--muted); font-family: var(--mono); font-size: 10.5px; }
+.cal-cell.today .cal-day { color: var(--accent); font-weight: 700; }
+.cal-chip {
+  display: flex; align-items: center; gap: 3px; margin-top: 3px; padding: 1px 4px;
+  background: var(--surface); border-radius: 4px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; cursor: default; font-size: 10.5px; color: var(--ink);
+}
+.cal-chip .dot { width: 7px; height: 7px; flex: none; margin-right: 2px; }
+.cal-chip.done { opacity: .4; text-decoration: line-through; }
+
+/* shared deadline tooltip */
+.dl-tip {
+  position: fixed; z-index: 60; max-width: 240px; background: var(--surface-2);
+  border: 1px solid #33333c; border-radius: 8px; padding: 8px 11px; font-size: 12px;
+  color: var(--ink); box-shadow: 0 8px 28px rgba(0,0,0,.5); pointer-events: none;
+}
+.dl-tip[hidden] { display: none; }
+
 dialog {
   border: 1px solid #33333c; border-radius: 10px; padding: 16px 18px; min-width: 380px;
   background: var(--surface); color: var(--ink);

@@ -6,17 +6,24 @@ const path = require('path');
 
 // Known folder -> module mapping (spec). Anything unknown becomes a module
 // named after its folder so other roots work too.
+// Colors: CVD-validated categorical palette for dark surfaces (fixed assignment,
+// never cycled); REF gets a neutral gray since it's a shared library, not a series.
 const KNOWN_MODULES = {
-  'computibility':      { code: 'COMP3001', name: 'Computability & Complexity', color: '#7c6ff0', work: 'proof' },
-  'machine_learning':   { code: 'COMP3009', name: 'Machine Learning',           color: '#4f8ff7', work: 'coding' },
-  'computer vision':    { code: 'COMP3007', name: 'Computer Vision',            color: '#22b8cf', work: 'coding' },
-  'cryptography':       { code: 'COMP3077', name: 'Cryptography',               color: '#e8590c', work: 'coding' },
-  'agent':              { code: 'COMP3004', name: 'Agents',                     color: '#f59f00', work: 'writing' },
-  'computer security':  { code: 'COMP3006', name: 'Computer Security',          color: '#e64980', work: 'coding' },
-  'ethics':             { code: 'COMP3020', name: 'Ethics',                     color: '#94d82d', work: 'writing' },
-  'dessertation':       { code: 'COMP3003', name: 'Dissertation',               color: '#20c997', work: 'writing' },
+  'computibility':      { code: 'COMP3001', name: 'Computability & Complexity', color: '#9085e9', work: 'proof' },
+  'machine_learning':   { code: 'COMP3009', name: 'Machine Learning',           color: '#3987e5', work: 'coding' },
+  'computer vision':    { code: 'COMP3007', name: 'Computer Vision',            color: '#199e70', work: 'coding' },
+  'cryptography':       { code: 'COMP3077', name: 'Cryptography',               color: '#d95926', work: 'coding' },
+  'agent':              { code: 'COMP3004', name: 'Agents',                     color: '#c98500', work: 'writing' },
+  'computer security':  { code: 'COMP3006', name: 'Computer Security',          color: '#d55181', work: 'coding' },
+  'ethics':             { code: 'COMP3020', name: 'Ethics',                     color: '#008300', work: 'writing' },
+  'dessertation':       { code: 'COMP3003', name: 'Dissertation',               color: '#e66767', work: 'writing' },
   'referenceBook':      { code: 'REF',      name: 'Shared Reference Library',   color: '#868e96', work: 'reading' },
 };
+
+// Defaults shipped before the validated palette — refreshed on re-ingest so
+// existing databases pick up the fix; user-customized colors are left alone.
+const LEGACY_DEFAULT_COLORS = new Set(['#7c6ff0', '#4f8ff7', '#22b8cf', '#e8590c',
+  '#f59f00', '#e64980', '#94d82d', '#20c997', '#4f6df5', '#10a37f', '#5b8cff']);
 
 const INDEX_EXTS = new Set(['.pdf', '.md', '.ipynb', '.docx', '.pptx', '.txt', '.py', '.c', '.cpp', '.html', '.doc']);
 const SKIP_DIRS = new Set(['node_modules', '__pycache__', '.git', 'venv', '.venv', 'env',
@@ -163,4 +170,5 @@ function parseStrategy(mdPath) {
   return sections;
 }
 
-module.exports = { scanRoot, parseStrategy, classify, seqFromFilename, examDateFromFilename, KNOWN_MODULES };
+module.exports = { scanRoot, parseStrategy, classify, seqFromFilename, examDateFromFilename,
+  KNOWN_MODULES, LEGACY_DEFAULT_COLORS };

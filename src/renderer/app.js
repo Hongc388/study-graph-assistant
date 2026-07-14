@@ -648,13 +648,41 @@ async function renderToday() {
 }
 
 // ---------- Deadlines ----------
+let dlView = null;       // 'list' | 'timeline' | 'calendar' (persisted)
+let calCursor = null;    // 'YYYY-MM' shown by the calendar
 async function renderDeadlines() {
   const [dls, mods, topics] = await Promise.all([api.deadlinesList(), api.modulesList(), api.topicsList()]);
+  if (dlView === null) dlView = (await api.settingsGet('deadline_view')) || 'timeline';
+
   view.innerHTML = `
     <div class="row" style="justify-content:space-between">
-      <h2>Deadlines</h2><button id="add-dl" class="primary">+ Deadline</button>
+      <h2>Deadlines</h2>
+      <div class="row">
+        <div class="seg" role="tablist">
+          ${['timeline', 'calendar', 'list'].map(v =>
+            `<button class="seg-btn ${dlView === v ? 'on' : ''}" data-v="${v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join('')}
+        </div>
+        <button id="add-dl" class="primary">+ Deadline</button>
+      </div>
     </div>
-    <table><thead><tr><th>Due</th><th>Module</th><th>Title</th><th>Weight</th><th>Topic</th><th></th></tr></thead>
+    <div id="dl-body"></div>`;
+  view.querySelectorAll('.seg-btn').forEach(b => b.addEventListener('click', async () => {
+    dlView = b.dataset.v;
+    await api.settingsSet('deadline_view', dlView);
+    route();
+  }));
+
+  const body = view.querySelector('#dl-body');
+  if (dlView === 'timeline') body.innerHTML = timelineHtml(dls);
+  else if (dlView === 'calendar') body.innerHTML = calendarHtml(dls);
+  else body.innerHTML = listHtml(dls, topics);
+  if (dlView === 'calendar') bindCalendarNav();
+  bindDlTooltips(dls);
+  bindListButtons();
+
+  // ----- List -----
+  function listHtml(dls, topics) {
+    return `<table><thead><tr><th>Due</th><th>Module</th><th>Title</th><th>Weight</th><th>Topic</th><th></th></tr></thead>
     <tbody>
       ${dls.map(d => `<tr style="${d.done ? 'opacity:.45' : ''}">
         <td class="mono" style="white-space:nowrap">${esc(d.due_at.slice(0, 16).replace('T', ' '))}</td>
@@ -667,7 +695,143 @@ async function renderDeadlines() {
           <button class="danger-ghost small del-dl" data-id="${d.id}">✕</button></td>
       </tr>`).join('') || '<tr><td colspan="6" class="muted">No deadlines.</td></tr>'}
     </tbody></table>`;
+  }
 
+  // ----- Timeline: one line, every deadline a dot, soonest first -----
+  function timelineHtml(dls) {
+    const open = dls.filter(d => !d.done).sort((a, b) => a.due_at.localeCompare(b.due_at));
+    if (!open.length) return '<p class="muted">No open deadlines — the timeline is clear.</p>';
+    const now = Date.now();
+    const DAY = 86400000;
+    const t0 = Math.min(now, new Date(open[0].due_at).getTime()) - 2 * DAY;
+    const t1 = new Date(open[open.length - 1].due_at).getTime() + 4 * DAY;
+    const W = 920, H = 190, PAD = 40, AXIS_Y = 118;
+    const x = (t) => PAD + (t - t0) / (t1 - t0) * (W - 2 * PAD);
+
+    // month ticks
+    const ticks = [];
+    const d0 = new Date(t0); d0.setDate(1); d0.setMonth(d0.getMonth() + 1);
+    for (let d = d0; d.getTime() < t1; d.setMonth(d.getMonth() + 1)) {
+      ticks.push({ t: d.getTime(), label: d.toLocaleString('en', { month: 'short' }) });
+    }
+
+    // stack same/close dates upward so dots never overlap
+    const placed = [];
+    const dots = open.map((d, i) => {
+      const t = new Date(d.due_at).getTime();
+      const cx = x(t);
+      let lane = 0;
+      while (placed.some(p => Math.abs(p.cx - cx) < 22 && p.lane === lane)) lane++;
+      placed.push({ cx, lane });
+      const cy = AXIS_Y - 22 - lane * 30;
+      const overdue = t < now;
+      const days = Math.ceil((t - now) / DAY);
+      return { d, i, cx, cy, overdue, days };
+    });
+
+    return `<div class="panel" style="overflow-x:auto">
+      <svg viewBox="0 0 ${W} ${H}" style="width:100%; min-width:700px; display:block">
+        <line x1="${PAD}" y1="${AXIS_Y}" x2="${W - PAD}" y2="${AXIS_Y}" stroke="#3c3c48" stroke-width="1.5"/>
+        ${ticks.map(tk => `
+          <line x1="${x(tk.t)}" y1="${AXIS_Y - 4}" x2="${x(tk.t)}" y2="${AXIS_Y + 4}" stroke="#3c3c48"/>
+          <text x="${x(tk.t)}" y="${AXIS_Y + 18}" text-anchor="middle" fill="#7d7d8a" font-size="10">${tk.label}</text>`).join('')}
+        <line x1="${x(now)}" y1="26" x2="${x(now)}" y2="${AXIS_Y}" stroke="#5b8cff" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="${x(now)}" y="16" text-anchor="middle" fill="#5b8cff" font-size="10" font-weight="700">today</text>
+        ${dots.map(({ d, i, cx, cy, overdue, days }) => `
+          <g class="dl-dot" data-i="${i}" style="cursor:pointer">
+            <line x1="${cx}" y1="${cy}" x2="${cx}" y2="${AXIS_Y}" stroke="${esc(d.module_color)}" stroke-width="1" opacity=".35"/>
+            <circle cx="${cx}" cy="${cy}" r="${6 + Math.min(4, d.weight * 1.5)}"
+              fill="${esc(d.module_color)}" stroke="#1a1a1e" stroke-width="2"
+              ${overdue ? 'opacity=".45"' : ''}/>
+            <text x="${cx}" y="${cy - 13}" text-anchor="middle" fill="#d6d6dd" font-size="9.5"
+              font-family="var(--mono)">${esc(d.module_code)}</text>
+            <text x="${cx}" y="${AXIS_Y + 32}" text-anchor="middle" font-size="9.5"
+              fill="${overdue ? '#e5534b' : days <= 7 ? '#e5534b' : days <= 21 ? '#c98500' : '#7d7d8a'}"
+              font-weight="700">${overdue ? 'overdue' : days === 0 ? 'today' : days + 'd'}</text>
+          </g>`).join('')}
+      </svg>
+      <p class="muted" style="margin-top:6px">Dot size = weight · label = days left · hover a dot for details.
+        Soonest is leftmost.</p>
+    </div>
+    <div id="dl-tip" class="dl-tip" hidden></div>`;
+  }
+
+  // ----- Calendar: month grid -----
+  function calendarHtml(dls) {
+    if (!calCursor) calCursor = today().slice(0, 7);
+    const [Y, M] = calCursor.split('-').map(Number);
+    const first = new Date(Y, M - 1, 1);
+    const startDow = (first.getDay() + 6) % 7; // Monday-first
+    const daysInMonth = new Date(Y, M, 0).getDate();
+    const byDay = new Map();
+    for (const d of dls) {
+      const key = d.due_at.slice(0, 10);
+      if (!byDay.has(key)) byDay.set(key, []);
+      byDay.get(key).push(d);
+    }
+    const cells = [];
+    for (let i = 0; i < startDow; i++) cells.push('<div class="cal-cell off"></div>');
+    for (let day = 1; day <= daysInMonth; day++) {
+      const iso = `${Y}-${String(M).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const items = byDay.get(iso) || [];
+      cells.push(`<div class="cal-cell ${iso === today() ? 'today' : ''}">
+        <span class="cal-day">${day}</span>
+        ${items.map(d => `<span class="cal-chip ${d.done ? 'done' : ''}" data-i="${dls.indexOf(d)}"
+            title="${esc(d.title)}">
+          <span class="dot" style="background:${esc(d.module_color)}"></span>${esc(d.title)}</span>`).join('')}
+      </div>`);
+    }
+    const monthName = first.toLocaleString('en', { month: 'long', year: 'numeric' });
+    return `<div class="panel">
+      <div class="row" style="justify-content:space-between; margin-bottom:10px">
+        <button class="small" id="cal-prev">←</button>
+        <b>${monthName}</b>
+        <div class="row">
+          <button class="small" id="cal-today">Today</button>
+          <button class="small" id="cal-next">→</button>
+        </div>
+      </div>
+      <div class="cal-grid">
+        ${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => `<div class="cal-head">${d}</div>`).join('')}
+        ${cells.join('')}
+      </div>
+    </div>
+    <div id="dl-tip" class="dl-tip" hidden></div>`;
+  }
+  function bindCalendarNav() {
+    const shift = (n) => {
+      const [Y, M] = calCursor.split('-').map(Number);
+      const d = new Date(Y, M - 1 + n, 1);
+      calCursor = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      route();
+    };
+    view.querySelector('#cal-prev').addEventListener('click', () => shift(-1));
+    view.querySelector('#cal-next').addEventListener('click', () => shift(1));
+    view.querySelector('#cal-today').addEventListener('click', () => { calCursor = today().slice(0, 7); route(); });
+  }
+
+  // shared hover tooltip for timeline dots and calendar chips
+  function bindDlTooltips(dls) {
+    const tip = view.querySelector('#dl-tip');
+    if (!tip) return;
+    const show = (el, d) => {
+      const days = Math.ceil((new Date(d.due_at).getTime() - Date.now()) / 86400000);
+      tip.innerHTML = `<b>${esc(d.title)}</b><br>
+        <span class="mono">${esc(d.due_at.slice(0, 16).replace('T', ' '))}</span> ·
+        ${esc(d.module_code)} · weight ${d.weight}<br>
+        <span class="${days < 0 ? 'error' : ''}">${days < 0 ? Math.abs(days) + ' days overdue' : days + ' days left'}</span>`;
+      const r = el.getBoundingClientRect();
+      tip.hidden = false;
+      tip.style.left = Math.min(r.left, window.innerWidth - 240) + 'px';
+      tip.style.top = (r.bottom + 8) + 'px';
+    };
+    view.querySelectorAll('.dl-dot, .cal-chip').forEach(el => {
+      el.addEventListener('mouseenter', () => show(el, dls[Number(el.dataset.i)]));
+      el.addEventListener('mouseleave', () => { tip.hidden = true; });
+    });
+  }
+
+  function bindListButtons() {
   view.querySelector('#add-dl').addEventListener('click', async () => {
     if (!mods.length) return alert('Create a module first.');
     const d = await formDialog('New deadline', [
@@ -693,6 +857,7 @@ async function renderDeadlines() {
   view.querySelectorAll('.del-dl').forEach(b => b.addEventListener('click', async () => {
     if (confirm('Delete deadline?')) { await api.deadlinesDelete(Number(b.dataset.id)); route(); }
   }));
+  }
 }
 
 // ---------- Settings ----------
