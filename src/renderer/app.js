@@ -597,9 +597,42 @@ async function renderModule(idStr) {
 }
 
 // ---------- Graph ----------
+// Not one big map: module scope by default, focus mode for 1-hop questions,
+// sparse edges (prereq + related); cross-module stays a list until asked for.
+let graphScope = null;      // module id | 'all'
+let graphKinds = null;      // Set of visible edge kinds
+let graphFocus = null;      // topic id in focus mode (1-hop subgraph)
 async function renderGraph_() {
-  const [mods, topics, edges] = await Promise.all([api.modulesList(), api.topicsList(), api.edgesList()]);
+  const [mods, allTopics, allEdges] = await Promise.all([api.modulesList(), api.topicsList(), api.edgesList()]);
   const colors = new Map(mods.map(m => [m.id, m.color]));
+  if (graphScope === null) {
+    const saved = await api.settingsGet('graph_scope');
+    graphScope = currentModuleId || (saved === 'all' ? 'all' : Number(saved) || mods[0]?.id || 'all');
+  }
+  if (graphKinds === null) {
+    graphKinds = new Set(JSON.parse(await api.settingsGet('graph_kinds') || '["prereq","related"]'));
+  }
+
+  // --- apply scope / focus / kind filters ---
+  const focusTopic = graphFocus && allTopics.find(t => t.id === graphFocus);
+  let topics, edges;
+  if (focusTopic) {
+    // focus mode: the topic + 1-hop neighbors, ALL edge kinds (that's the point)
+    const nbr = new Set([focusTopic.id]);
+    for (const e of allEdges) {
+      if (e.from_topic === focusTopic.id) nbr.add(e.to_topic);
+      if (e.to_topic === focusTopic.id) nbr.add(e.from_topic);
+    }
+    topics = allTopics.filter(t => nbr.has(t.id));
+    edges = allEdges.filter(e => e.from_topic === focusTopic.id || e.to_topic === focusTopic.id);
+  } else {
+    topics = graphScope === 'all' ? allTopics : allTopics.filter(t => t.module_id === graphScope);
+    const ids = new Set(topics.map(t => t.id));
+    edges = allEdges.filter(e => ids.has(e.from_topic) && ids.has(e.to_topic) && graphKinds.has(e.kind));
+  }
+
+  const KIND_LABELS = { prereq: 'prereq', related: 'related', cross_module: 'cross-module',
+    analogy: 'analogy', exam_cluster: 'exam-cluster' };
   view.innerHTML = `
     <div class="row" style="justify-content:space-between">
       <h2>Topic Graph</h2>
@@ -608,22 +641,55 @@ async function renderGraph_() {
         <button id="ai-edges">✨ Suggest links (AI)</button>
       </div>
     </div>
+    <div class="row" style="margin-bottom:8px">
+      <select id="g-scope" ${focusTopic ? 'disabled' : ''}>
+        ${mods.map(m => `<option value="${m.id}" ${graphScope === m.id ? 'selected' : ''}>${esc(m.code)} — ${esc(m.name)}</option>`).join('')}
+        <option value="all" ${graphScope === 'all' ? 'selected' : ''}>All modules (advanced)</option>
+      </select>
+      ${focusTopic
+        ? `<span class="chip" style="background:#26263a; color:var(--ink-bright)">focus: ${esc(focusTopic.name)}</span>
+           <button class="small" id="g-unfocus">✕ exit focus</button>
+           <span class="muted">showing 1-hop neighbors, all edge kinds</span>`
+        : ['prereq', 'related', 'cross_module', 'analogy', 'exam_cluster'].map(k =>
+            `<label style="display:inline-flex; align-items:center; gap:4px; margin:0; font-size:12px; color:var(--muted); cursor:pointer">
+              <input type="checkbox" class="g-kind" value="${k}" ${graphKinds.has(k) ? 'checked' : ''}>${KIND_LABELS[k]}</label>`).join('')}
+    </div>
     <div class="legend">
       <span class="l-prereq">prereq</span><span class="l-related">related</span>
       <span class="l-cross">cross-module</span><span class="l-analogy">analogy</span>
       <span class="l-exam">exam-cluster</span>
-      <span class="muted" style="margin-left:auto">node size = mastery · click node for details · drag to move</span>
+      <span class="muted" style="margin-left:auto">node size = readiness · click node to focus · drag to move</span>
     </div>
     <svg id="graph-svg"></svg>
     <div id="topic-panel"></div>
     <p id="graph-msg" class="muted"></p>`;
 
+  view.querySelector('#g-scope').addEventListener('change', async (e) => {
+    graphScope = e.target.value === 'all' ? 'all' : Number(e.target.value);
+    graphFocus = null;
+    await api.settingsSet('graph_scope', String(graphScope));
+    route();
+  });
+  view.querySelectorAll('.g-kind').forEach(cb => cb.addEventListener('change', async () => {
+    cb.checked ? graphKinds.add(cb.value) : graphKinds.delete(cb.value);
+    await api.settingsSet('graph_kinds', JSON.stringify([...graphKinds]));
+    route();
+  }));
+  view.querySelector('#g-unfocus')?.addEventListener('click', () => { graphFocus = null; route(); });
+
   const svg = view.querySelector('#graph-svg');
-  requestAnimationFrame(() => window.renderGraph(svg, topics, edges, colors, showTopicPanel));
+  requestAnimationFrame(() => window.renderGraph(svg, topics, edges, colors, (t) => {
+    if (graphFocus !== t.id) { graphFocus = t.id; route(); }
+    showTopicPanel(t);
+  }));
+  if (focusTopic) showTopicPanel(focusTopic);
+  if (!topics.length) view.querySelector('#graph-msg').textContent =
+    'No topics in this scope yet — pick another module or index the library.';
 
   function showTopicPanel(t) {
     const mod = mods.find(m => m.id === t.module_id);
-    const related = edges
+    // the panel always lists ALL links (incl. cross-module), even when not drawn
+    const related = allEdges
       .filter(e => e.from_topic === t.id || e.to_topic === t.id)
       .map(e => {
         const otherName = e.from_topic === t.id ? e.to_name : e.from_name;
@@ -646,12 +712,12 @@ async function renderGraph_() {
     }));
   }
 
-  const topicOptions = topics.map(t => ({
+  const topicOptions = allTopics.map(t => ({
     value: t.id,
     label: `${mods.find(m => m.id === t.module_id)?.code || '?'} / ${t.name}`,
   }));
   view.querySelector('#add-edge').addEventListener('click', async () => {
-    if (topics.length < 2) return alert('Create at least two topics first.');
+    if (allTopics.length < 2) return alert('Create at least two topics first.');
     const d = await formDialog('Link topics', [
       { name: 'from_topic', label: 'From (prereq: the one to learn first)', type: 'select', options: topicOptions },
       { name: 'to_topic', label: 'To', type: 'select', options: topicOptions },
@@ -671,11 +737,18 @@ async function renderGraph_() {
     const r = await api.aiSuggestEdges();
     if (!r.ok) { msg.textContent = r.error; return; }
     msg.textContent = '';
-    const nameOf = (id) => topics.find(t => t.id === id)?.name || `#${id}`;
-    // drop suggestions referencing unknown topics or duplicating existing edges
-    const valid = r.edges.filter(s =>
-      topics.some(t => t.id === s.from) && topics.some(t => t.id === s.to) && s.from !== s.to
-      && !edges.some(e => e.from_topic === s.from && e.to_topic === s.to && e.kind === s.kind));
+    const nameOf = (id) => allTopics.find(t => t.id === id)?.name || `#${id}`;
+    // strict edge policy: drop unknown topics, existing edges, AND symmetric
+    // clutter (any A→B or B→A pair already linked in any kind)
+    const linked = new Set(allEdges.flatMap(e => [`${e.from_topic}:${e.to_topic}`, `${e.to_topic}:${e.from_topic}`]));
+    const seen = new Set();
+    const valid = r.edges.filter(s => {
+      if (!allTopics.some(t => t.id === s.from) || !allTopics.some(t => t.id === s.to) || s.from === s.to) return false;
+      if (linked.has(`${s.from}:${s.to}`)) return false;
+      if (seen.has(`${s.from}:${s.to}`) || seen.has(`${s.to}:${s.from}`)) return false;
+      seen.add(`${s.from}:${s.to}`);
+      return true;
+    });
     if (!valid.length) { msg.textContent = 'No new links suggested.'; return; }
     const picked = await reviewDialog('AI link suggestions',
       valid.map(s => ({ label: `${nameOf(s.from)} → ${nameOf(s.to)}  [${s.kind}]`, detail: s.note || '' })),

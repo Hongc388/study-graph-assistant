@@ -30,6 +30,8 @@ const SKIP_DIRS = new Set(['node_modules', '__pycache__', '.git', 'venv', '.venv
   'site-packages', 'dist', 'build', 'checkpoints', 'data', 'datasets', 'Untitled']);
 const MAX_DEPTH = 4;
 const MAX_FILES_PER_MODULE = 400;
+// Topics are a curated spine, not a folder mirror — not every file gets a node.
+const MAX_TOPICS_PER_MODULE = 25;
 
 const TYPE_BY_HINT = [
   [/assignment|problemset|coursework|homework|hw\d/i, 'assignment'],
@@ -126,7 +128,7 @@ function scanRoot(root) {
     };
     const files = scanModuleDir(path.join(root, e.name));
     const seen = new Set();
-    const topicSuggestions = [];
+    let topicSuggestions = [];
     for (const f of files) {
       const t = topicFromFilename(f.name);
       if (t && !seen.has(t.toLowerCase())) {
@@ -134,6 +136,14 @@ function scanRoot(root) {
         topicSuggestions.push({ name: t, fromFile: f.name, seq: f.seq });
       }
     }
+    // Merge prefix duplicates ("Monocular Depth" ⊂ "Monocular Depth Estimation")
+    // keeping the longer, more specific name.
+    topicSuggestions = topicSuggestions.filter(a =>
+      !topicSuggestions.some(b => b !== a &&
+        b.name.toLowerCase().startsWith(a.name.toLowerCase()) && b.name.length > a.name.length));
+    // Spine topics first, then cap — the rest stay reachable as materials.
+    topicSuggestions.sort((a, b) => (a.seq == null) - (b.seq == null) || (a.seq ?? 0) - (b.seq ?? 0));
+    topicSuggestions = topicSuggestions.slice(0, MAX_TOPICS_PER_MODULE);
     out.modules.push({ folder: e.name, ...known, files, topicSuggestions });
   }
   return out;
