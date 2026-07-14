@@ -58,6 +58,32 @@ test('no block is shorter than 25 minutes and blocks fit the window', () => {
   }
 });
 
+test('under-budget module gets boosted with a budget rationale', () => {
+  const w = world();
+  w.deadlines = [];
+  // equal mastery so only the hour deficit differentiates SVM (mod 2) vs Entropy (mod 3)
+  w.topics = [
+    { id: 3, module_id: 2, name: 'SVM', mastery: 0.5 },
+    { id: 4, module_id: 3, name: 'Entropy', mastery: 0.5 },
+  ];
+  w.edges = [];
+  w.modules = [
+    { id: 2, spent_min: 0, target_hours: 100 },      // untouched → deficit 1
+    { id: 3, spent_min: 6000, target_hours: 100 },   // done → deficit 0
+  ];
+  const plan = planDay(w);
+  assert.strictEqual(plan[0].topic_id, 3, 'starved module scheduled first');
+  assert.match(plan[0].reason, /module under budget: 0h\/100h/);
+});
+
+test('problem counts appear in the rationale when present', () => {
+  const w = world();
+  w.topics[0] = { ...w.topics[0], mastery: 0.2, problem_count: 8, solved_count: 2, attempted_count: 1 };
+  const plan = planDay(w);
+  const svd = plan.find(b => b.topic_id === 1);
+  assert.match(svd.reason, /2\/8 problems solved/);
+});
+
 test('done deadlines are ignored', () => {
   const w = world();
   w.topics[0].mastery = 0.8;

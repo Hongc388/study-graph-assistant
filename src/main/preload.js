@@ -8,6 +8,7 @@ const channels = [
   'materials:list', 'materials:create', 'materials:update', 'materials:delete',
   'materials:search', 'materials:pickFiles', 'materials:open',
   'ingest:run', 'ingest:defaultRoot', 'ingest:pickRoot', 'notes:list',
+  'problems:list', 'problems:create', 'problems:update', 'problems:delete', 'sessions:create',
   'edges:list', 'edges:create', 'edges:delete',
   'deadlines:list', 'deadlines:create', 'deadlines:update', 'deadlines:delete',
   'blocks:list', 'blocks:setStatus', 'plan:generate',

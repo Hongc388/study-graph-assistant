@@ -57,7 +57,7 @@ async function refreshTree() {
     if (open) {
       const mats = await api.materialsList(m.id);
       for (const f of mats.slice(0, 80)) {
-        parts.push(`<div class="tree-file" data-path="${esc(f.path)}" data-mid="${m.id}" title="${esc(f.title)}">${esc(f.title)}</div>`);
+        parts.push(`<div class="tree-file" data-path="${esc(f.path)}" data-id="${f.id}" title="${esc(f.title)}">${esc(f.title)}</div>`);
       }
       if (!mats.length) parts.push('<div class="tree-file muted">— empty —</div>');
     }
@@ -73,7 +73,8 @@ async function refreshTree() {
     el.addEventListener('click', () => { location.hash = `#/module/${id}`; });
   });
   tree.querySelectorAll('.tree-file').forEach(el =>
-    el.addEventListener('click', () => { if (el.dataset.path) api.materialsOpen(el.dataset.path); }));
+    el.addEventListener('click', () =>
+      openMaterial(Number(el.dataset.id), el.title, el.dataset.path)));
 }
 document.getElementById('reindex').addEventListener('click', runIngest);
 
@@ -94,6 +95,46 @@ async function runIngest(root) {
     route();
   } catch (e) {
     tree.innerHTML = `<div class="tree-empty error">${esc(e.message)}</div>`;
+  }
+}
+
+// ---------- material timer (time ledger) ----------
+// Opening a material starts a timer; stopping it logs a material_session.
+// Starting a new one auto-logs the previous (if >= 1 minute).
+let timer = null; // { materialId, title, startedMs, tick }
+function openMaterial(materialId, title, path) {
+  if (path && !path.startsWith('http')) api.materialsOpen(path);
+  startTimer(materialId, title);
+}
+async function startTimer(materialId, title) {
+  if (!materialId) return;
+  await stopTimer(true);
+  timer = { materialId, title, startedMs: Date.now() };
+  const el = document.getElementById('st-timer');
+  el.hidden = false;
+  const render = () => {
+    if (!timer) return;
+    const min = Math.floor((Date.now() - timer.startedMs) / 60000);
+    const sec = Math.floor(((Date.now() - timer.startedMs) % 60000) / 1000);
+    el.innerHTML = `⏱ ${min}:${String(sec).padStart(2, '0')} ${esc(timer.title.slice(0, 28))} <a href="#" id="st-timer-stop" style="color:var(--danger)">■ stop</a>`;
+    el.querySelector('#st-timer-stop').onclick = (e) => { e.preventDefault(); stopTimer(); };
+  };
+  render();
+  timer.tick = setInterval(render, 1000);
+}
+async function stopTimer(silent = false) {
+  if (!timer) return;
+  clearInterval(timer.tick);
+  const minutes = Math.round((Date.now() - timer.startedMs) / 60000);
+  const { materialId, title } = timer;
+  timer = null;
+  const el = document.getElementById('st-timer');
+  el.hidden = true;
+  if (minutes >= 1) {
+    await api.sessionsCreate({ material_id: materialId, duration_min: minutes, source: 'timer' });
+    if (!silent) toastStatus(`logged ${minutes}m on ${title.slice(0, 30)}`);
+  } else if (!silent) {
+    toastStatus('timer under a minute — not logged');
   }
 }
 
@@ -172,7 +213,7 @@ palInput.addEventListener('input', async () => {
     const mats = await api.materialsSearch(q);
     items = items.concat(mats.slice(0, 8).map(m => ({
       icon: '≡', label: m.title, hint: 'open file',
-      run: () => api.materialsOpen(m.path),
+      run: () => openMaterial(m.id, m.title, m.path),
     })));
   }
   palItems = items; palSel = 0;
@@ -292,6 +333,10 @@ async function renderDashboard() {
           <div class="name">${esc(m.name)}</div>
           <div class="stats">${m.topic_count} topics · ${m.material_count} materials
             ${m.open_deadlines ? ` · <b style="color:var(--danger)">${m.open_deadlines} due</b>` : ''}</div>
+          ${m.target_hours ? `<div class="stats" style="margin-top:6px">
+            <span class="mbar" style="width:120px"><div style="width:${Math.min(100, (m.spent_min / 60) / m.target_hours * 100)}%"></div></span>
+            <span class="mono"> ${(m.spent_min / 60).toFixed(0)}h / ${m.target_hours}h</span></div>`
+          : m.spent_min ? `<div class="stats mono" style="margin-top:6px">${(m.spent_min / 60).toFixed(1)}h logged</div>` : ''}
         </div>`).join('')}
     </div>
     ${mods.length === 0 ? `<div class="panel" style="margin-top:14px">
@@ -331,8 +376,12 @@ async function renderModule(idStr) {
     <div class="row" style="justify-content:space-between">
       <h2><span class="dot" style="background:${esc(mod.color)}"></span>${esc(mod.code)} — ${esc(mod.name)}
         ${mod.exam_pct ? `<span class="chip">exam ${mod.exam_pct}%</span>` : ''}
-        <span class="chip">${esc(mod.work || '')}</span></h2>
-      <button id="del-mod" class="danger-ghost">Delete module</button>
+        <span class="chip">${esc(mod.work || '')}</span>
+        ${mod.target_hours ? `<span class="chip mono">${(mod.spent_min / 60).toFixed(0)}h / ${mod.target_hours}h</span>` : ''}</h2>
+      <div class="row">
+        <button id="set-budget" class="small">Hour budget…</button>
+        <button id="del-mod" class="danger-ghost">Delete module</button>
+      </div>
     </div>
 
     ${assessment || tips.length ? `<div class="panel">
@@ -351,18 +400,23 @@ async function renderModule(idStr) {
       <button id="ai-topics" class="small">✨ Suggest topics (AI)</button>
       <span id="ai-topics-msg" class="muted"></span>
     </div>
-    <table><thead><tr><th>Topic</th><th>Mastery</th><th>Summary</th><th></th></tr></thead>
+    <table><thead><tr><th>Topic</th><th>Readiness</th><th>Problems</th><th>Time</th><th></th></tr></thead>
     <tbody>
       ${topics.map(t => `<tr>
-        <td><b>${esc(t.name)}</b></td>
+        <td><b>${esc(t.name)}</b>${t.summary ? `<br><span class="muted">${esc(t.summary)}</span>` : ''}</td>
         <td><span class="mbar"><div style="width:${t.mastery * 100}%"></div></span>
-            <span class="muted"> ${(t.mastery * 100).toFixed(0)}%</span></td>
-        <td class="muted">${esc(t.summary)}</td>
+            <span class="muted"> ${(t.mastery * 100).toFixed(0)}%${t.problem_count ? '' : ' <span title="no problems tagged — weak time-based proxy, capped at 60%">(time)</span>'}</span></td>
+        <td><button class="small probs" data-id="${t.id}">${t.problem_count
+            ? `${t.solved_count}/${t.problem_count} solved` : '+ problems'}</button></td>
+        <td class="muted mono">${t.exposure_min ? (t.exposure_min / 60).toFixed(1) + 'h' : '—'}</td>
         <td style="text-align:right; white-space:nowrap">
           <button class="small edit-topic" data-id="${t.id}">Edit</button>
           <button class="danger-ghost small del-topic" data-id="${t.id}">✕</button></td>
-      </tr>`).join('') || '<tr><td colspan="4" class="muted">No topics yet.</td></tr>'}
+      </tr>`).join('') || '<tr><td colspan="5" class="muted">No topics yet.</td></tr>'}
     </tbody></table>
+    <p class="muted" style="margin-top:6px">Readiness is derived: with problems tagged it's solved ÷ total
+      (attempts count 30%); without problems it's a capped time-exposure proxy. Log time by opening
+      materials (timer) or completing Today blocks.</p>
 
     <h3>Materials</h3>
     <div class="row" style="margin-bottom:8px">
@@ -376,7 +430,7 @@ async function renderModule(idStr) {
 
   function matRow(m, topicName) {
     return `<tr>
-      <td title="${esc(m.path)}"><a href="#" class="open-mat" data-path="${esc(m.path)}"
+      <td title="${esc(m.path)}"><a href="#" class="open-mat" data-path="${esc(m.path)}" data-id="${m.id}"
         style="color:var(--ink); text-decoration:none"><b>${esc(m.title)}</b></a></td>
       <td><span class="chip">${esc(m.type)}</span></td>
       <td class="muted">${esc(topicName(m.topic_id))}</td>
@@ -404,17 +458,75 @@ async function renderModule(idStr) {
   const topicFields = (t = {}) => [
     { name: 'name', label: 'Name', value: t.name },
     { name: 'summary', label: 'Summary', type: 'textarea', value: t.summary },
-    { name: 'mastery', label: 'Mastery (0–1)', type: 'number', step: '0.05', min: 0, max: 1, value: t.mastery ?? 0.3 },
   ];
   view.querySelector('#add-topic').addEventListener('click', async () => {
     const d = await formDialog('New topic', topicFields());
-    if (d && d.name.trim()) { await api.topicsCreate({ module_id: id, ...d, mastery: Number(d.mastery) }); route(); }
+    if (d && d.name.trim()) { await api.topicsCreate({ module_id: id, ...d }); route(); }
   });
   view.querySelectorAll('.edit-topic').forEach(b => b.addEventListener('click', async () => {
     const t = topics.find(x => x.id === Number(b.dataset.id));
     const d = await formDialog('Edit topic', topicFields(t));
-    if (d) { await api.topicsUpdate({ ...t, ...d, mastery: Number(d.mastery) }); route(); }
+    if (d) { await api.topicsUpdate({ ...t, ...d }); route(); }
   }));
+  view.querySelector('#set-budget').addEventListener('click', async () => {
+    const d = await formDialog('Hour budget', [
+      { name: 'target_hours', label: 'Target hours for this module (UK: credits × 10)',
+        type: 'number', step: '5', min: 0, value: mod.target_hours ?? 100 },
+    ]);
+    if (d) { await api.modulesUpdate({ ...mod, target_hours: Number(d.target_hours) || null }); route(); }
+  });
+  // problems dialog: check off attempts/solutions per topic
+  view.querySelectorAll('.probs').forEach(b => b.addEventListener('click', () =>
+    problemsDialog(topics.find(x => x.id === Number(b.dataset.id)), materials)));
+  async function problemsDialog(topic, materials) {
+    const probs = await api.problemsList(topic.id);
+    const probMats = materials.filter(m => ['exam-prep', 'assignment', 'lab'].includes(m.type));
+    const dlg = document.createElement('dialog');
+    dlg.style.minWidth = '560px';
+    const STATUSES = ['todo', 'attempted', 'solved', 'reviewed'];
+    dlg.innerHTML = `<h3>Problems — ${esc(topic.name)}</h3>
+      <p class="muted">Readiness = solved ÷ total (attempts count 30%). Tag problems from past papers,
+        problem sheets and notebooks.</p>
+      <div id="prob-list" style="max-height:300px; overflow-y:auto; margin-top:8px">
+        ${probs.map(p => `<div class="row" style="border-bottom:1px solid var(--line); padding:5px 0" data-pid="${p.id}">
+          <span style="flex:1">${esc(p.label)}
+            ${p.material_title ? `<span class="chip">${esc(p.material_title.slice(0, 24))}</span>` : ''}</span>
+          <select class="p-status">${STATUSES.map(s =>
+            `<option ${p.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select>
+          <button class="danger-ghost small p-del">✕</button>
+        </div>`).join('') || '<p class="muted">No problems tagged yet.</p>'}
+      </div>
+      <div class="row" style="margin-top:12px">
+        <input id="p-new" placeholder="e.g. 2026 paper Q3 — reduction proof" style="flex:1">
+        <select id="p-mat"><option value="">(no file)</option>
+          ${probMats.map(m => `<option value="${m.id}">${esc(m.title.slice(0, 32))}</option>`).join('')}</select>
+        <button class="primary small" id="p-add">Add</button>
+      </div>
+      <div class="row" style="justify-content:flex-end; margin-top:14px">
+        <button id="p-close">Close</button>
+      </div>`;
+    document.body.appendChild(dlg);
+    dlg.querySelectorAll('[data-pid]').forEach(row => {
+      const pid = Number(row.dataset.pid);
+      const p = probs.find(x => x.id === pid);
+      row.querySelector('.p-status').addEventListener('change', (e) =>
+        api.problemsUpdate({ ...p, status: e.target.value }));
+      row.querySelector('.p-del').addEventListener('click', async () => {
+        await api.problemsDelete(pid); row.remove();
+      });
+    });
+    dlg.querySelector('#p-add').addEventListener('click', async () => {
+      const label = dlg.querySelector('#p-new').value.trim();
+      if (!label) return;
+      await api.problemsCreate({ topic_id: topic.id, label,
+        material_id: Number(dlg.querySelector('#p-mat').value) || null });
+      dlg.close(); dlg.remove();
+      problemsDialog(topic, materials); // reopen with fresh list
+    });
+    dlg.querySelector('#p-close').addEventListener('click', () => { dlg.close(); dlg.remove(); route(); });
+    dlg.addEventListener('cancel', () => { dlg.remove(); route(); });
+    dlg.showModal();
+  }
   view.querySelectorAll('.del-topic').forEach(b => b.addEventListener('click', async () => {
     if (confirm('Delete topic?')) { await api.topicsDelete(Number(b.dataset.id)); route(); }
   }));
@@ -464,7 +576,7 @@ async function renderModule(idStr) {
   function bindMatButtons() {
     view.querySelectorAll('.open-mat').forEach(a => a.addEventListener('click', (e) => {
       e.preventDefault();
-      if (a.dataset.path && !a.dataset.path.startsWith('http')) api.materialsOpen(a.dataset.path);
+      openMaterial(Number(a.dataset.id), a.textContent, a.dataset.path);
     }));
     view.querySelectorAll('.edit-mat').forEach(b => b.addEventListener('click', async () => {
       const m = materials.find(x => x.id === Number(b.dataset.id));

@@ -20,13 +20,22 @@ const DAY_MS = 24 * 3600 * 1000;
  * @param opts {
  *   date: 'YYYY-MM-DD',
  *   windows: [{start_min, end_min}],   // available time, minutes since midnight
- *   topics, edges, deadlines, materials // straight from db
+ *   topics, edges, deadlines, materials, // straight from db (topic mastery is derived)
+ *   modules?  // [{id, spent_min, target_hours}] for the hour-budget deficit term
  * }
  * @returns [{start_min, end_min, topic_id, material_id, reason}]
  */
 function planDay(opts) {
-  const { date, windows, topics, edges, deadlines, materials } = opts;
+  const { date, windows, topics, edges, deadlines, materials, modules = [] } = opts;
   const topicById = new Map(topics.map(t => [t.id, t]));
+
+  // Module hour deficit: 0 (on/over budget) … 1 (untouched). Under-budget
+  // modules get a boost so no course silently starves.
+  const deficitByModule = new Map(modules.map(m => {
+    if (!m.target_hours) return [m.id, { d: 0 }];
+    const d = Math.max(0, 1 - (m.spent_min || 0) / (m.target_hours * 60));
+    return [m.id, { d, label: `${((m.spent_min || 0) / 60).toFixed(0)}h/${m.target_hours}h logged` }];
+  }));
 
   // --- prerequisite map: child -> [parents] ---
   const parents = new Map();
@@ -57,14 +66,20 @@ function planDay(opts) {
   }
 
   // --- score every topic ---
+  // need = competence gap (derived mastery), scaled by deadline urgency,
+  // plus the module's hour-budget deficit (spec: no course silently starves).
   const scored = topics.map(t => {
     const u = urgency.get(t.id);
     const blockers = blockedBy(t);
     const need = 1 - t.mastery;
-    let score = need * (1 + 3 * (u?.score ?? 0));
+    const def = deficitByModule.get(t.module_id) || { d: 0 };
+    let score = need * (1 + 3 * (u?.score ?? 0)) + 0.5 * def.d;
     const why = [];
     if (u) why.push(u.label);
-    why.push(`mastery ${(t.mastery * 100).toFixed(0)}%`);
+    why.push(t.problem_count > 0
+      ? `${t.solved_count}/${t.problem_count} problems solved`
+      : `mastery ${(t.mastery * 100).toFixed(0)}% (time-based)`);
+    if (def.d > 0.3 && def.label) why.push(`module under budget: ${def.label}`);
     if (blockers.length) {
       // Not ready: its blocking parents inherit its urgency instead.
       score = -1;

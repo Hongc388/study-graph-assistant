@@ -78,6 +78,21 @@ function migrate() {
     key TEXT PRIMARY KEY,
     value TEXT
   );
+  CREATE TABLE IF NOT EXISTS material_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+    started_at TEXT NOT NULL,
+    duration_min INTEGER NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('block','manual','timer'))
+  );
+  CREATE TABLE IF NOT EXISTS problems (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+    material_id INTEGER REFERENCES materials(id) ON DELETE SET NULL,
+    label TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo','attempted','solved','reviewed')),
+    updated_at TEXT
+  );
   CREATE TABLE IF NOT EXISTS module_notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     module_id INTEGER NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
@@ -93,6 +108,7 @@ function migrate() {
   addCol('modules', 'folder', "TEXT DEFAULT ''");
   addCol('modules', 'work', "TEXT DEFAULT 'reading'"); // proof | coding | writing | reading
   addCol('modules', 'exam_pct', 'REAL');
+  addCol('modules', 'target_hours', 'REAL'); // hour budget (UK: credits × 10)
   addCol('materials', 'mtime', 'REAL');
   addCol('materials', 'size', 'INTEGER');
   addCol('materials', 'seq', 'INTEGER'); // spine position from "01-", "Unit2", …
@@ -127,7 +143,9 @@ const listModules = () => all(`
   SELECT m.*,
     (SELECT COUNT(*) FROM topics t WHERE t.module_id = m.id) AS topic_count,
     (SELECT COUNT(*) FROM materials x WHERE x.module_id = m.id) AS material_count,
-    (SELECT COUNT(*) FROM deadlines d WHERE d.module_id = m.id AND d.done = 0) AS open_deadlines
+    (SELECT COUNT(*) FROM deadlines d WHERE d.module_id = m.id AND d.done = 0) AS open_deadlines,
+    (SELECT COALESCE(SUM(s.duration_min), 0) FROM material_sessions s
+       JOIN materials x ON x.id = s.material_id WHERE x.module_id = m.id) AS spent_min
   FROM modules m ORDER BY m.code`);
 const createModule = (m) =>
   run('INSERT INTO modules (code, name, term, color) VALUES (?,?,?,?)',
@@ -138,16 +156,57 @@ const updateModule = (m) =>
 const deleteModule = (id) => run('DELETE FROM modules WHERE id=?', id);
 
 // ---------- topics ----------
-const listTopics = (moduleId) => moduleId
-  ? all('SELECT * FROM topics WHERE module_id=? ORDER BY name', moduleId)
-  : all('SELECT * FROM topics ORDER BY module_id, name');
+// Mastery is DERIVED, never typed in:
+//   with problems tagged:  (solved|reviewed + 0.3×attempted) / total  — competence
+//   without problems:      exposure proxy from logged time on linked materials,
+//                          capped at 0.6 so reading alone never looks "mastered"
+//                          (5h of logged time reaches the cap).
+const EXPOSURE_CAP = 0.6;
+const EXPOSURE_FULL_MIN = 300;
+function deriveMastery(row) {
+  if (row.problem_count > 0) {
+    return Math.min(1, (row.solved_count + 0.3 * row.attempted_count) / row.problem_count);
+  }
+  return Math.min(EXPOSURE_CAP, (row.exposure_min / EXPOSURE_FULL_MIN) * EXPOSURE_CAP);
+}
+const TOPIC_SQL = `
+  SELECT t.id, t.module_id, t.name, t.summary,
+    (SELECT COUNT(*) FROM problems p WHERE p.topic_id = t.id) AS problem_count,
+    (SELECT COUNT(*) FROM problems p WHERE p.topic_id = t.id AND p.status IN ('solved','reviewed')) AS solved_count,
+    (SELECT COUNT(*) FROM problems p WHERE p.topic_id = t.id AND p.status = 'attempted') AS attempted_count,
+    (SELECT COALESCE(SUM(s.duration_min), 0) FROM material_sessions s
+       JOIN materials m ON m.id = s.material_id WHERE m.topic_id = t.id) AS exposure_min
+  FROM topics t`;
+const listTopics = (moduleId) => {
+  const rows = moduleId
+    ? all(TOPIC_SQL + ' WHERE t.module_id=? ORDER BY t.name', moduleId)
+    : all(TOPIC_SQL + ' ORDER BY t.module_id, t.name');
+  return rows.map(r => ({ ...r, mastery: deriveMastery(r) }));
+};
 const createTopic = (t) =>
-  run('INSERT INTO topics (module_id, name, summary, mastery) VALUES (?,?,?,?)',
-    t.module_id, t.name, t.summary || '', t.mastery ?? 0.3).lastInsertRowid;
+  run('INSERT INTO topics (module_id, name, summary) VALUES (?,?,?)',
+    t.module_id, t.name, t.summary || '').lastInsertRowid;
 const updateTopic = (t) =>
-  run('UPDATE topics SET name=?, summary=?, mastery=? WHERE id=?',
-    t.name, t.summary || '', t.mastery, t.id);
+  run('UPDATE topics SET name=?, summary=? WHERE id=?', t.name, t.summary || '', t.id);
 const deleteTopic = (id) => run('DELETE FROM topics WHERE id=?', id);
+
+// ---------- problems (the competence signal) ----------
+const listProblems = (topicId) => all(`
+  SELECT p.*, m.title AS material_title FROM problems p
+  LEFT JOIN materials m ON m.id = p.material_id
+  WHERE p.topic_id=? ORDER BY p.id`, topicId);
+const createProblem = (p) =>
+  run('INSERT INTO problems (topic_id, material_id, label, status, updated_at) VALUES (?,?,?,?,?)',
+    p.topic_id, p.material_id || null, p.label, p.status || 'todo', new Date().toISOString()).lastInsertRowid;
+const updateProblem = (p) =>
+  run('UPDATE problems SET label=?, status=?, material_id=?, updated_at=? WHERE id=?',
+    p.label, p.status, p.material_id || null, new Date().toISOString(), p.id);
+const deleteProblem = (id) => run('DELETE FROM problems WHERE id=?', id);
+
+// ---------- material sessions (the time ledger) ----------
+const createMaterialSession = (s) =>
+  run('INSERT INTO material_sessions (material_id, started_at, duration_min, source) VALUES (?,?,?,?)',
+    s.material_id, s.started_at || new Date().toISOString(), s.duration_min, s.source || 'manual').lastInsertRowid;
 
 // ---------- materials ----------
 // Spine-numbered files first, in curriculum order; the rest alphabetically.
@@ -208,22 +267,19 @@ const createBlock = (b) =>
   run('INSERT INTO study_blocks (date, start_min, end_min, topic_id, material_id, reason) VALUES (?,?,?,?,?,?)',
     b.date, b.start_min, b.end_min, b.topic_id, b.material_id || null, b.reason || '').lastInsertRowid;
 
-// Marking a block done/skipped also logs a session and nudges mastery.
+// Marking a block done logs TIME (a fact), never a mastery bump (an opinion) —
+// mastery only moves when problems get solved or exposure accumulates.
 function setBlockStatus(id, status) {
   const b = get('SELECT * FROM study_blocks WHERE id=?', id);
   if (!b) return;
   run('UPDATE study_blocks SET status=? WHERE id=?', status, id);
   if (b.topic_id) {
-    if (status === 'done') {
-      run('INSERT INTO study_sessions (topic_id, date, duration_min, outcome) VALUES (?,?,?,?)',
-        b.topic_id, b.date, b.end_min - b.start_min, 'done');
-      // Diminishing-returns mastery bump: long sessions help more, capped at 1.
-      const gain = Math.min(0.15, (b.end_min - b.start_min) / 600);
-      run('UPDATE topics SET mastery = MIN(1.0, mastery + ?) WHERE id=?', gain, b.topic_id);
-    } else if (status === 'skipped') {
-      run('INSERT INTO study_sessions (topic_id, date, duration_min, outcome) VALUES (?,?,?,?)',
-        b.topic_id, b.date, 0, 'skipped');
-    }
+    run('INSERT INTO study_sessions (topic_id, date, duration_min, outcome) VALUES (?,?,?,?)',
+      b.topic_id, b.date, status === 'done' ? b.end_min - b.start_min : 0, status);
+  }
+  if (status === 'done' && b.material_id) {
+    createMaterialSession({ material_id: b.material_id,
+      duration_min: b.end_min - b.start_min, source: 'block' });
   }
 }
 
@@ -308,6 +364,11 @@ function applyIngest(scan, strategy, opts = {}) {
         const mod = get('SELECT id FROM modules WHERE code=?', sec.code);
         if (!mod) continue;
         if (sec.examPct != null) run('UPDATE modules SET exam_pct=? WHERE id=?', sec.examPct, mod.id);
+        // UK convention: 1 credit ≈ 10 hours total effort. Only fill when unset
+        // so a hand-tuned budget survives re-ingest.
+        if (sec.credits != null && get('SELECT target_hours FROM modules WHERE id=?', mod.id).target_hours == null) {
+          run('UPDATE modules SET target_hours=? WHERE id=?', sec.credits * 10, mod.id);
+        }
         run('DELETE FROM module_notes WHERE module_id=? AND source=?', mod.id, 'strategy.md');
         if (sec.assessment)
           run('INSERT INTO module_notes (module_id, kind, content, source) VALUES (?,?,?,?)',
@@ -342,6 +403,7 @@ module.exports = {
   listEdges, createEdge, deleteEdge,
   listDeadlines, createDeadline, updateDeadline, deleteDeadline,
   listBlocks, clearPlannedBlocks, createBlock, setBlockStatus,
+  listProblems, createProblem, updateProblem, deleteProblem, createMaterialSession,
   applyIngest, listModuleNotes,
   getSetting, setSetting,
 };

@@ -97,6 +97,7 @@ function registerIpc() {
         edges: db.listEdges(),
         deadlines: db.listDeadlines(),
         materials: db.listMaterials(),
+        modules: db.listModules(),
       });
       db.clearPlannedBlocks(date);
       for (const b of plan) db.createBlock({ ...b, date });
@@ -120,6 +121,12 @@ function registerIpc() {
       return r.canceled ? null : r.filePaths[0];
     },
     'notes:list': (_, moduleId) => db.listModuleNotes(moduleId),
+    // problems (competence signal) + time ledger
+    'problems:list': (_, topicId) => db.listProblems(topicId),
+    'problems:create': (_, p) => db.createProblem(p),
+    'problems:update': (_, p) => db.updateProblem(p),
+    'problems:delete': (_, id) => db.deleteProblem(id),
+    'sessions:create': (_, s) => db.createMaterialSession(s),
     // open a material with the OS default app (Preview, etc.)
     'materials:open': (_, p) => shell.openPath(p),
     // settings

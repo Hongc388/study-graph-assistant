@@ -152,12 +152,14 @@ function parseStrategy(mdPath) {
     const head = line.match(/^##\s+\d+\.\s*(.+?)\s*\((COMP\d{4})\)/);
     if (head) {
       cur = { code: head[2], heading: head[1].replace(/[^\p{L}\p{N} &-]/gu, '').trim(),
-              assessment: '', examPct: null, tips: [] };
+              assessment: '', examPct: null, credits: null, tips: [] };
       sections.push(cur);
       continue;
     }
     if (!cur) continue;
     if (/^##\s/.test(line) && !/^###/.test(line)) { cur = null; continue; }
+    const cred = line.match(/\*\*Credits:?\*\*\s*(\d+)|Credits:\s*(\d+)/i);
+    if (cred) cur.credits = Number(cred[1] || cred[2]);
     const assess = line.match(/\*\*Assessment:?\*\*\s*(.+)|Assessment:\s*(.+)/i);
     if (assess) {
       cur.assessment = (assess[1] || assess[2]).trim();
