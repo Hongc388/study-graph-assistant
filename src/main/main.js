@@ -63,6 +63,7 @@ function registerIpc() {
     'topics:create': (_, t) => db.createTopic(t),
     'topics:update': (_, t) => db.updateTopic(t),
     'topics:delete': (_, id) => db.deleteTopic(id),
+    'topics:merge': (_, { keepId, mergeId }) => db.mergeTopics(keepId, mergeId),
     // materials
     'materials:list': (_, moduleId) => db.listMaterials(moduleId),
     'materials:create': (_, m) => db.createMaterial(m),
@@ -126,6 +127,7 @@ function registerIpc() {
     'problems:create': (_, p) => db.createProblem(p),
     'problems:update': (_, p) => db.updateProblem(p),
     'problems:delete': (_, id) => db.deleteProblem(id),
+    'problems:queue': (_, limit) => db.listProblemQueue(limit ?? 80),
     'sessions:create': (_, s) => db.createMaterialSession(s),
     // open a material with the OS default app (Preview, etc.)
     'materials:open': (_, p) => shell.openPath(p),

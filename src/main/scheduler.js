@@ -48,12 +48,19 @@ function planDay(opts) {
   const blockedBy = (t) =>
     (parents.get(t.id) || []).filter(pid => (topicById.get(pid)?.mastery ?? 1) < READY_THRESHOLD);
 
-  // --- urgency per topic from open deadlines ---
+  // --- urgency per topic from open deadlines; exam mode = exam within 14 days ---
   const now = new Date(date + 'T00:00:00').getTime();
+  const examModules = new Set();
   const urgency = new Map(); // topic_id -> {score, label}
   for (const d of deadlines) {
     if (d.done) continue;
     const daysLeft = Math.max(0.5, (new Date(d.due_at).getTime() - now) / DAY_MS);
+    if (daysLeft <= 14) {
+      if (d.topic_id) {
+        const mid = topics.find(t => t.id === d.topic_id)?.module_id;
+        if (mid) examModules.add(mid);
+      } else if (d.module_id) examModules.add(d.module_id);
+    }
     const score = (d.weight || 1) / daysLeft; // closer + heavier = hotter
     const apply = (tid) => {
       const cur = urgency.get(tid);
@@ -74,8 +81,15 @@ function planDay(opts) {
     const need = 1 - t.mastery;
     const def = deficitByModule.get(t.module_id) || { d: 0 };
     let score = need * (1 + 3 * (u?.score ?? 0)) + 0.5 * def.d;
+    const examMode = examModules.has(t.module_id);
+    if (examMode && t.problem_count > 0 && t.solved_count < t.problem_count) {
+      score *= 1.35;
+    }
     const why = [];
     if (u) why.push(u.label);
+    if (examMode && t.problem_count > 0 && t.solved_count < t.problem_count) {
+      why.push('exam mode: unsolved problems');
+    }
     why.push(t.problem_count > 0
       ? `${t.solved_count}/${t.problem_count} problems solved`
       : `mastery ${(t.mastery * 100).toFixed(0)}% (time-based)`);
@@ -110,8 +124,13 @@ function planDay(opts) {
     if (!matsByTopic.has(m.topic_id)) matsByTopic.set(m.topic_id, []);
     matsByTopic.get(m.topic_id).push(m);
   }
-  const pickMaterial = (tid) => {
+  const pickMaterial = (tid, examUrgent = false) => {
     const ms = matsByTopic.get(tid) || [];
+    if (examUrgent) {
+      return ms.find(m => m.type === 'exam-prep')
+        || ms.find(m => m.type === 'assignment' && m.due_at)
+        || ms[0] || null;
+    }
     return ms.find(m => m.type === 'assignment' && m.due_at) || ms[0] || null;
   };
 
@@ -136,7 +155,8 @@ function planDay(opts) {
       const s = queue.shift();
       if (usedTopics.has(s.topic.id)) continue;
       const remaining = w.end_min - cursor;
-      const mat = pickMaterial(s.topic.id);
+      const examUrgent = examModules.has(s.topic.module_id);
+      const mat = pickMaterial(s.topic.id, examUrgent);
       const wantLong = mat?.type === 'assignment' || remaining >= FOCUS_BLOCK + REVIEW_BLOCK;
       const len = Math.min(remaining, wantLong ? FOCUS_BLOCK : Math.max(MIN_BLOCK, remaining));
       plan.push({
@@ -153,7 +173,7 @@ function planDay(opts) {
         if (rev) {
           plan.push({
             start_min: cursor, end_min: cursor + REVIEW_BLOCK,
-            topic_id: rev.id, material_id: pickMaterial(rev.id)?.id || null,
+            topic_id: rev.id, material_id: pickMaterial(rev.id, examModules.has(rev.module_id))?.id || null,
             reason: `spaced cross-module review — linked to "${s.topic.name}"`,
           });
           usedTopics.add(rev.id);

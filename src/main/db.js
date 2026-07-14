@@ -151,8 +151,8 @@ const createModule = (m) =>
   run('INSERT INTO modules (code, name, term, color) VALUES (?,?,?,?)',
     m.code, m.name, m.term || '', m.color || '#4f6df5').lastInsertRowid;
 const updateModule = (m) =>
-  run('UPDATE modules SET code=?, name=?, term=?, color=? WHERE id=?',
-    m.code, m.name, m.term || '', m.color, m.id);
+  run('UPDATE modules SET code=?, name=?, term=?, color=?, target_hours=? WHERE id=?',
+    m.code, m.name, m.term || '', m.color, m.target_hours ?? null, m.id);
 const deleteModule = (id) => run('DELETE FROM modules WHERE id=?', id);
 
 // ---------- topics ----------
@@ -189,6 +189,60 @@ const createTopic = (t) =>
 const updateTopic = (t) =>
   run('UPDATE topics SET name=?, summary=? WHERE id=?', t.name, t.summary || '', t.id);
 const deleteTopic = (id) => run('DELETE FROM topics WHERE id=?', id);
+
+// Merge mergeId into keepId: reassign dependents, collapse edges, delete duplicate topic.
+function mergeTopics(keepId, mergeId) {
+  if (keepId === mergeId) throw new Error('Cannot merge a topic with itself');
+  if (!get('SELECT id FROM topics WHERE id=?', keepId)) throw new Error('Keep topic not found');
+  if (!get('SELECT id FROM topics WHERE id=?', mergeId)) throw new Error('Merge topic not found');
+  const tx = db.transaction(() => {
+    for (const sql of [
+      'UPDATE materials SET topic_id=? WHERE topic_id=?',
+      'UPDATE problems SET topic_id=? WHERE topic_id=?',
+      'UPDATE deadlines SET topic_id=? WHERE topic_id=?',
+      'UPDATE study_blocks SET topic_id=? WHERE topic_id=?',
+      'UPDATE study_sessions SET topic_id=? WHERE topic_id=?',
+    ]) run(sql, keepId, mergeId);
+    for (const e of all('SELECT * FROM topic_edges WHERE from_topic=? OR to_topic=?', mergeId, mergeId)) {
+      const from = e.from_topic === mergeId ? keepId : e.from_topic;
+      const to = e.to_topic === mergeId ? keepId : e.to_topic;
+      run('DELETE FROM topic_edges WHERE id=?', e.id);
+      if (from !== to) {
+        run('INSERT OR IGNORE INTO topic_edges (from_topic, to_topic, kind, weight, note) VALUES (?,?,?,?,?)',
+          from, to, e.kind, e.weight, e.note);
+      }
+    }
+    run('DELETE FROM topics WHERE id=?', mergeId);
+  });
+  tx();
+}
+
+// Ordered backlog of unsolved problems (exam-soon modules first).
+function listProblemQueue(limit = 80) {
+  const rows = all(`
+    SELECT p.*, t.name AS topic_name, t.module_id,
+           m.code AS module_code, m.color AS module_color, m.name AS module_name,
+           ma.title AS material_title, ma.path AS material_path, ma.id AS material_id,
+           (SELECT MIN(d.due_at) FROM deadlines d
+              WHERE d.module_id = t.module_id AND d.done = 0) AS next_due
+    FROM problems p
+    JOIN topics t ON t.id = p.topic_id
+    JOIN modules m ON m.id = t.module_id
+    LEFT JOIN materials ma ON ma.id = p.material_id
+    WHERE p.status IN ('todo', 'attempted')
+    ORDER BY next_due IS NULL, next_due ASC,
+             CASE p.status WHEN 'attempted' THEN 0 ELSE 1 END,
+             p.id
+    LIMIT ?`, limit);
+  const now = Date.now();
+  return rows.map(r => {
+    let daysLeft = null;
+    if (r.next_due) {
+      daysLeft = Math.ceil((new Date(r.next_due).getTime() - now) / 86400000);
+    }
+    return { ...r, days_left: daysLeft };
+  });
+}
 
 // ---------- problems (the competence signal) ----------
 const listProblems = (topicId) => all(`
@@ -398,7 +452,8 @@ const setSetting = (key, value) =>
 module.exports = {
   open,
   listModules, createModule, updateModule, deleteModule,
-  listTopics, createTopic, updateTopic, deleteTopic,
+  listTopics, createTopic, updateTopic, deleteTopic, mergeTopics,
+  listProblemQueue,
   listMaterials, createMaterial, updateMaterial, deleteMaterial, searchMaterials,
   listEdges, createEdge, deleteEdge,
   listDeadlines, createDeadline, updateDeadline, deleteDeadline,

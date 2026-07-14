@@ -91,3 +91,19 @@ test('done deadlines are ignored', () => {
   const plan = planDay(w);
   assert.ok(!/ML midterm/.test(plan.map(b => b.reason).join(' ')));
 });
+
+test('exam mode boosts topics with unsolved problems when exam is within 14 days', () => {
+  const w = world();
+  w.topics = [
+    { id: 1, module_id: 1, name: 'SVD', mastery: 0.4, problem_count: 5, solved_count: 1 },
+    { id: 3, module_id: 2, name: 'SVM', mastery: 0.4, problem_count: 0, solved_count: 0 },
+  ];
+  w.edges = [];
+  w.deadlines = [
+    { module_id: 1, topic_id: null, title: 'LinAlg exam', due_at: '2026-07-20', weight: 3, done: 0 },
+    { module_id: 2, topic_id: null, title: 'ML exam', due_at: '2026-07-20', weight: 3, done: 0 },
+  ];
+  const plan = planDay(w);
+  assert.strictEqual(plan[0].topic_id, 1);
+  assert.match(plan[0].reason, /exam mode: unsolved problems/);
+});

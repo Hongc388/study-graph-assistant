@@ -14,6 +14,7 @@ const routes = {
   dashboard: renderDashboard,
   module: renderModule,       // #/module/<id>
   graph: renderGraph_,
+  queue: renderQueue,
   today: renderToday,
   deadlines: renderDeadlines,
   settings: renderSettings,
@@ -169,6 +170,7 @@ async function paletteCommands() {
   const cmds = [
     { icon: '⟳', label: 'Index year_three (re-scan library)', run: () => runIngest() },
     { icon: '▸', label: 'Plan today', run: () => { location.hash = '#/today'; } },
+    { icon: '▤', label: 'Problem queue', run: () => { location.hash = '#/queue'; } },
     { icon: '◉', label: 'Open topic graph', run: () => { location.hash = '#/graph'; } },
     { icon: '◷', label: 'Show deadlines', run: () => { location.hash = '#/deadlines'; } },
     { icon: '▽', label: 'Show weak topics', run: showWeakTopics },
@@ -316,8 +318,22 @@ function formDialog(title, fields, submitLabel = 'Save') {
 // ---------- Dashboard ----------
 async function renderDashboard() {
   currentModuleId = null;
-  const mods = await api.modulesList();
+  const [mods, dls] = await Promise.all([api.modulesList(), api.deadlinesList()]);
+  const now = Date.now();
+  const soon = dls.filter(d => !d.done)
+    .map(d => ({ ...d, days: Math.ceil((new Date(d.due_at).getTime() - now) / 86400000) }))
+    .filter(d => d.days >= 0 && d.days <= 21)
+    .sort((a, b) => a.days - b.days);
   view.innerHTML = `
+    ${soon.length ? `<div class="panel exam-banner" style="border-color:var(--danger); margin-bottom:14px">
+      <b style="color:var(--danger)">Exam countdown</b>
+      <div class="row" style="flex-wrap:wrap; gap:8px; margin-top:8px">
+        ${soon.map(d => `<span class="chip" style="border-color:var(--danger)">
+          <span class="dot" style="background:${esc(d.module_color)}"></span>
+          ${esc(d.module_code)} · ${esc(d.title)} · <b>${d.days}d</b></span>`).join('')}
+      </div>
+      <p class="muted" style="margin:8px 0 0">Planner boosts unsolved problems in these modules for the next 14 days.</p>
+    </div>` : ''}
     <div class="row" style="justify-content:space-between">
       <h2>Modules</h2>
       <div class="row">
@@ -410,6 +426,7 @@ async function renderModule(idStr) {
             ? `${t.solved_count}/${t.problem_count} solved` : '+ problems'}</button></td>
         <td class="muted mono">${t.exposure_min ? (t.exposure_min / 60).toFixed(1) + 'h' : '—'}</td>
         <td style="text-align:right; white-space:nowrap">
+          <button class="small merge-topic" data-id="${t.id}">Merge…</button>
           <button class="small edit-topic" data-id="${t.id}">Edit</button>
           <button class="danger-ghost small del-topic" data-id="${t.id}">✕</button></td>
       </tr>`).join('') || '<tr><td colspan="5" class="muted">No topics yet.</td></tr>'}
@@ -530,6 +547,24 @@ async function renderModule(idStr) {
   view.querySelectorAll('.del-topic').forEach(b => b.addEventListener('click', async () => {
     if (confirm('Delete topic?')) { await api.topicsDelete(Number(b.dataset.id)); route(); }
   }));
+  view.querySelectorAll('.merge-topic').forEach(b => b.addEventListener('click', async () => {
+    const keepId = Number(b.dataset.id);
+    const keep = topics.find(t => t.id === keepId);
+    const others = topics.filter(t => t.id !== keepId);
+    if (!others.length) return alert('Need another topic to merge into this one.');
+    const d = await formDialog(`Merge into "${keep.name}"`, [{
+      name: 'mergeId', label: 'Duplicate topic to absorb (will be deleted)',
+      type: 'select',
+      options: others.map(t => ({ value: t.id, label: t.name })),
+    }], 'Merge');
+    if (!d) return;
+    const mergeId = Number(d.mergeId);
+    if (!mergeId || mergeId === keepId) return;
+    const victim = topics.find(t => t.id === mergeId)?.name || 'topic';
+    if (!confirm(`Merge "${victim}" into "${keep.name}"? Materials, problems and links move over.`)) return;
+    await api.topicsMerge({ keepId, mergeId });
+    route();
+  }));
 
   view.querySelector('#ai-topics').addEventListener('click', async () => {
     const msg = view.querySelector('#ai-topics-msg');
@@ -594,6 +629,42 @@ async function renderModule(idStr) {
     }));
   }
   bindMatButtons();
+}
+
+// ---------- Problem queue ----------
+async function renderQueue() {
+  const items = await api.problemsQueue(100);
+  view.innerHTML = `
+    <div class="row" style="justify-content:space-between">
+      <h2>Problem queue</h2>
+      <span class="muted">${items.length} open · exam-soon modules first</span>
+    </div>
+    <p class="muted">Work through unsolved problems. Mark status from the topic's problem list, or open the source file.</p>
+    <table><thead><tr><th>Problem</th><th>Topic</th><th>Module</th><th>Exam</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+      ${items.map(p => `<tr>
+        <td><b>${esc(p.label)}</b>
+          ${p.material_title ? `<br><span class="muted">${esc(p.material_title.slice(0, 40))}</span>` : ''}</td>
+        <td>${esc(p.topic_name)}</td>
+        <td><span class="dot" style="background:${esc(p.module_color)}"></span>${esc(p.module_code)}</td>
+        <td class="mono">${p.days_left != null ? (p.days_left <= 14
+            ? `<span style="color:var(--danger)">${p.days_left}d</span>` : `${p.days_left}d`) : '—'}</td>
+        <td><span class="chip">${esc(p.status)}</span></td>
+        <td style="text-align:right; white-space:nowrap">
+          <button class="small q-open" data-mid="${p.module_id}" data-tid="${p.topic_id}"
+            data-mat="${p.material_id || ''}" data-path="${esc(p.material_path || '')}"
+            data-title="${esc(p.material_title || p.label)}">Open</button>
+          <button class="small q-mod" data-mid="${p.module_id}">Module</button>
+        </td>
+      </tr>`).join('') || '<tr><td colspan="6" class="muted">No open problems — tag some from a topic\'s "+ problems" button.</td></tr>'}
+    </tbody></table>`;
+  view.querySelectorAll('.q-open').forEach(b => b.addEventListener('click', () => {
+    const matId = Number(b.dataset.mat);
+    if (matId) openMaterial(matId, b.dataset.title, b.dataset.path);
+    else location.hash = `#/module/${b.dataset.mid}`;
+  }));
+  view.querySelectorAll('.q-mod').forEach(b =>
+    b.addEventListener('click', () => { location.hash = `#/module/${b.dataset.mid}`; }));
 }
 
 // ---------- Graph ----------
