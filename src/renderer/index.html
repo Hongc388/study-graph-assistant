@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+  <title>Study Graph</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Cursor-like frame: activity bar | sidebar | main | status bar -->
+  <div id="activitybar">
+    <button class="act" data-view="dashboard" title="Modules">▦</button>
+    <button class="act" data-view="graph" title="Topic Graph">◉</button>
+    <button class="act" data-view="today" title="Today Plan">▸</button>
+    <button class="act" data-view="deadlines" title="Deadlines">◷</button>
+    <button class="act" data-view="settings" title="Settings" style="margin-top:auto">⚙</button>
+  </div>
+
+  <nav id="sidebar">
+    <div class="side-head">
+      <span id="side-title">LIBRARY</span>
+      <button id="reindex" class="icon-btn" title="Re-index library root">⟳</button>
+    </div>
+    <div id="tree"></div>
+  </nav>
+
+  <main id="view"></main>
+
+  <footer id="statusbar">
+    <span id="st-module" class="st-item">no module</span>
+    <span id="st-next" class="st-item"></span>
+    <span class="st-spacer"></span>
+    <span id="st-ai" class="st-item">AI: checking…</span>
+    <span class="st-item st-kbd">⌘K palette</span>
+  </footer>
+
+  <!-- command palette -->
+  <div id="palette" class="palette-overlay" hidden>
+    <div class="palette-box">
+      <input id="palette-input" placeholder="Type a command or search materials…" autocomplete="off">
+      <div id="palette-list"></div>
+    </div>
+  </div>
+
+  <script src="graphview.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
