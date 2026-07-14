@@ -274,6 +274,7 @@ const updateMaterial = (m) =>
   run('UPDATE materials SET topic_id=?, path=?, type=?, title=?, due_at=? WHERE id=?',
     m.topic_id || null, m.path || '', m.type, m.title, m.due_at || null, m.id);
 const deleteMaterial = (id) => run('DELETE FROM materials WHERE id=?', id);
+const getMaterial = (id) => get('SELECT * FROM materials WHERE id=?', id);
 const searchMaterials = (q, moduleId) => {
   const like = `%${q}%`;
   return moduleId
@@ -455,7 +456,7 @@ module.exports = {
   listModules, createModule, updateModule, deleteModule,
   listTopics, createTopic, updateTopic, deleteTopic, mergeTopics,
   listProblemQueue,
-  listMaterials, createMaterial, updateMaterial, deleteMaterial, searchMaterials,
+  listMaterials, getMaterial, createMaterial, updateMaterial, deleteMaterial, searchMaterials,
   listEdges, createEdge, deleteEdge,
   listDeadlines, createDeadline, updateDeadline, deleteDeadline,
   listBlocks, clearPlannedBlocks, createBlock, deleteBlock, setBlockStatus,

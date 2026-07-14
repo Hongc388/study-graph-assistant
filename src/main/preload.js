@@ -5,7 +5,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 const channels = [
   'modules:list', 'modules:create', 'modules:update', 'modules:delete',
   'topics:list', 'topics:create', 'topics:update', 'topics:delete', 'topics:merge',
-  'materials:list', 'materials:create', 'materials:update', 'materials:delete',
+  'materials:list', 'materials:create', 'materials:update', 'materials:delete', 'materials:organize',
   'materials:search', 'materials:pickFiles', 'materials:open', 'materials:closePreview',
   'ingest:run', 'ingest:defaultRoot', 'ingest:pickRoot', 'notes:list',
   'problems:list', 'problems:create', 'problems:update', 'problems:delete', 'problems:queue', 'sessions:create',

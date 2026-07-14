@@ -8,7 +8,61 @@ const toMin = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return h *
 const today = () => new Date().toISOString().slice(0, 10);
 
 const MATERIAL_TYPES = ['lecture', 'assignment', 'exam-prep', 'paper', 'lab', 'cheatsheet', 'notes'];
+const SECTION_SLOTS = [
+  ['lecture', 'Lecture notes'],
+  ['problemset', 'Problem set'],
+  ['reference', 'Reference'],
+  ['lab', 'Lab code'],
+];
 const EDGE_KINDS = ['prereq', 'related', 'cross_module', 'analogy', 'exam_cluster'];
+
+function slotLabel(type) {
+  return SECTION_SLOTS.find(([k]) => k === type)?.[1] || type;
+}
+
+function materialSlot(m) {
+  if (['assignment', 'exam-prep', 'paper'].includes(m.type)) return 'problemset';
+  if (['cheatsheet', 'notes'].includes(m.type)) return 'reference';
+  if (SECTION_SLOTS.some(([k]) => k === m.type)) return m.type;
+  return 'other';
+}
+
+function matChipHtml(m) {
+  return `<span class="mat-chip" draggable="true" data-id="${m.id}" data-path="${esc(m.path)}"
+    title="${esc(m.path)}">${esc(m.title)}</span>`;
+}
+
+function bindSectionBoard() {
+  view.querySelectorAll('.mat-chip').forEach(chip => {
+    chip.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/material-id', chip.dataset.id);
+      chip.classList.add('dragging');
+    });
+    chip.addEventListener('dragend', () => chip.classList.remove('dragging'));
+    chip.addEventListener('dblclick', () =>
+      openMaterial(Number(chip.dataset.id), chip.textContent, chip.dataset.path));
+  });
+  view.querySelectorAll('.slot-drop, .inbox-drop').forEach(zone => {
+    zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('over'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+    zone.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      zone.classList.remove('over');
+      const materialId = Number(e.dataTransfer.getData('text/material-id'));
+      if (!materialId) return;
+      const topicId = zone.dataset.topicId ? Number(zone.dataset.topicId) : null;
+      const slot = zone.dataset.slot || 'other';
+      try {
+        const r = await api.materialsOrganize({ materialId, topicId, slot });
+        if (r.renamed) toastStatus(`Renamed on disk → ${r.title}`);
+        else toastStatus(topicId ? `Placed in ${slotLabel(slot)}` : 'Moved to inbox');
+        route();
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+    });
+  });
+}
 
 // ---------- router ----------
 const routes = {
@@ -472,7 +526,6 @@ async function renderModule(idStr) {
     api.modulesList(), api.topicsList(id), api.materialsList(id), api.notesList(id)]);
   const mod = mods.find(m => m.id === id);
   if (!mod) { view.innerHTML = '<p class="error">Module not found.</p>'; return; }
-  const topicName = (tid) => topics.find(t => t.id === tid)?.name || '';
   const tips = notes.filter(n => n.kind === 'tip');
   const assessment = notes.find(n => n.kind === 'assessment');
 
@@ -498,53 +551,60 @@ async function renderModule(idStr) {
       <input id="search" placeholder="Search materials in this module…" style="width:280px">
     </div>
 
-    <h3>Topics</h3>
-    <div class="row" style="margin-bottom:8px">
-      <button id="add-topic" class="primary small">+ Topic</button>
-      <button id="ai-topics" class="small">✨ Suggest topics (AI)</button>
+    <h3>Sections &amp; materials</h3>
+    <p class="muted" style="margin:0 0 10px">Drag files into a section slot — the app renames them on disk
+      (e.g. <span class="mono">support-vector-machine-lecture.pdf</span>). Double-click to open.</p>
+    <div class="row" style="margin-bottom:10px">
+      <button id="add-topic" class="primary small">+ Section</button>
+      <button id="ai-topics" class="small">✨ Suggest sections (AI)</button>
+      <button id="import-files" class="small">+ Import files</button>
+      <button id="add-link" class="small">+ Add link</button>
       <span id="ai-topics-msg" class="muted"></span>
     </div>
-    <table><thead><tr><th>Topic</th><th>Readiness</th><th>Problems</th><th>Time</th><th></th></tr></thead>
-    <tbody>
-      ${topics.map(t => `<tr>
-        <td><b>${esc(t.name)}</b>${t.summary ? `<br><span class="muted">${esc(t.summary)}</span>` : ''}</td>
-        <td><span class="mbar"><div style="width:${t.mastery * 100}%"></div></span>
-            <span class="muted"> ${(t.mastery * 100).toFixed(0)}%${t.problem_count ? '' : ' <span title="no problems tagged — weak time-based proxy, capped at 60%">(time)</span>'}</span></td>
-        <td><button class="small probs" data-id="${t.id}">${t.problem_count
-            ? `${t.solved_count}/${t.problem_count} solved` : '+ problems'}</button></td>
-        <td class="muted mono">${t.exposure_min ? (t.exposure_min / 60).toFixed(1) + 'h' : '—'}</td>
-        <td style="text-align:right; white-space:nowrap">
-          <button class="small merge-topic" data-id="${t.id}">Merge…</button>
-          <button class="small edit-topic" data-id="${t.id}">Edit</button>
-          <button class="danger-ghost small del-topic" data-id="${t.id}">✕</button></td>
-      </tr>`).join('') || '<tr><td colspan="5" class="muted">No topics yet.</td></tr>'}
-    </tbody></table>
-    <p class="muted" style="margin-top:6px">Readiness is derived: with problems tagged it's solved ÷ total
-      (attempts count 30%); without problems it's a capped time-exposure proxy. Log time by opening
-      materials (timer) or completing Today blocks.</p>
 
-    <h3>Materials</h3>
-    <div class="row" style="margin-bottom:8px">
-      <button id="import-files" class="primary small">+ Import files</button>
-      <button id="add-link" class="small">+ Add link / note</button>
+    <div class="panel inbox-panel">
+      <b>Inbox</b> <span class="muted">— not yet assigned to a section</span>
+      <div class="inbox-drop slot-drop" data-slot="other">
+        ${materials.filter(m => !m.topic_id).map(matChipHtml).join('')
+          || '<span class="muted">Drop here to unassign · import or re-index to fill inbox</span>'}
+      </div>
     </div>
-    <table><thead><tr><th>Title</th><th>Type</th><th>Topic</th><th>Due</th><th></th></tr></thead>
-    <tbody id="mat-body">
-      ${materials.map(m => matRow(m, topicName)).join('') || '<tr><td colspan="5" class="muted">No materials yet.</td></tr>'}
-    </tbody></table>`;
 
-  function matRow(m, topicName) {
-    return `<tr>
-      <td title="${esc(m.path)}"><a href="#" class="open-mat" data-path="${esc(m.path)}" data-id="${m.id}"
-        style="color:var(--ink); text-decoration:none"><b>${esc(m.title)}</b></a></td>
-      <td><span class="chip">${esc(m.type)}</span></td>
-      <td class="muted">${esc(topicName(m.topic_id))}</td>
-      <td class="muted mono">${m.due_at ? esc(m.due_at.slice(0, 10)) : ''}</td>
-      <td style="text-align:right; white-space:nowrap">
-        <button class="small edit-mat" data-id="${m.id}">Edit</button>
-        <button class="danger-ghost small del-mat" data-id="${m.id}">✕</button></td>
-    </tr>`;
-  }
+    <div id="section-board">
+      ${topics.length ? topics.map(t => {
+        const secMats = materials.filter(m => m.topic_id === t.id);
+        return `<div class="section-card panel" data-section="${t.id}">
+          <div class="row" style="justify-content:space-between; align-items:flex-start; margin-bottom:8px">
+            <div>
+              <b>${esc(t.name)}</b>
+              ${t.summary ? `<div class="muted" style="font-size:12px">${esc(t.summary)}</div>` : ''}
+              <div style="margin-top:4px">
+                <span class="mbar"><div style="width:${t.mastery * 100}%"></div></span>
+                <span class="muted"> ${(t.mastery * 100).toFixed(0)}% readiness</span>
+                ${t.problem_count ? `<span class="chip">${t.solved_count}/${t.problem_count} solved</span>` : ''}
+              </div>
+            </div>
+            <div class="row" style="flex-wrap:nowrap">
+              <button class="small probs" data-id="${t.id}">${t.problem_count ? 'Problems' : '+ problems'}</button>
+              <button class="small edit-topic" data-id="${t.id}">Edit</button>
+              <button class="small merge-topic" data-id="${t.id}">Merge</button>
+              <button class="danger-ghost small del-topic" data-id="${t.id}">✕</button>
+            </div>
+          </div>
+          <div class="slot-grid">
+            ${SECTION_SLOTS.map(([slot, label]) => {
+              const items = secMats.filter(m => materialSlot(m) === slot);
+              return `<div class="slot-col">
+                <div class="slot-head">${esc(label)}</div>
+                <div class="slot-drop" data-topic-id="${t.id}" data-slot="${slot}">
+                  ${items.map(matChipHtml).join('') || '<span class="muted slot-hint">drop here</span>'}
+                </div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>`;
+      }).join('') : '<p class="muted">No sections yet — add one (e.g. Support Vector Machine) then drag materials from the inbox.</p>'}
+    </div>`;
 
   view.querySelector('#del-mod').addEventListener('click', async () => {
     if (confirm(`Delete module ${mod.code} and everything in it?`)) {
@@ -552,25 +612,28 @@ async function renderModule(idStr) {
     }
   });
 
-  view.querySelector('#search').addEventListener('input', async (e) => {
-    const q = e.target.value.trim();
-    const rows = q ? await api.materialsSearch(q, id) : await api.materialsList(id);
-    view.querySelector('#mat-body').innerHTML =
-      rows.map(m => matRow(m, topicName)).join('') || '<tr><td colspan="5" class="muted">No matches.</td></tr>';
-    bindMatButtons();
+  view.querySelector('#search').addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    view.querySelectorAll('.mat-chip').forEach(chip => {
+      chip.style.display = !q || chip.textContent.toLowerCase().includes(q) ? '' : 'none';
+    });
+    view.querySelectorAll('.section-card').forEach(card => {
+      const any = [...card.querySelectorAll('.mat-chip')].some(c => c.style.display !== 'none');
+      card.style.display = !q || any ? '' : 'none';
+    });
   });
 
   const topicFields = (t = {}) => [
-    { name: 'name', label: 'Name', value: t.name },
+    { name: 'name', label: 'Section name (e.g. Support Vector Machine)', value: t.name },
     { name: 'summary', label: 'Summary', type: 'textarea', value: t.summary },
   ];
   view.querySelector('#add-topic').addEventListener('click', async () => {
-    const d = await formDialog('New topic', topicFields());
+    const d = await formDialog('New section', topicFields());
     if (d && d.name.trim()) { await api.topicsCreate({ module_id: id, ...d }); route(); }
   });
   view.querySelectorAll('.edit-topic').forEach(b => b.addEventListener('click', async () => {
     const t = topics.find(x => x.id === Number(b.dataset.id));
-    const d = await formDialog('Edit topic', topicFields(t));
+    const d = await formDialog('Edit section', topicFields(t));
     if (d) { await api.topicsUpdate({ ...t, ...d }); route(); }
   }));
   view.querySelector('#set-budget').addEventListener('click', async () => {
@@ -585,7 +648,7 @@ async function renderModule(idStr) {
     problemsDialog(topics.find(x => x.id === Number(b.dataset.id)), materials)));
   async function problemsDialog(topic, materials) {
     const probs = await api.problemsList(topic.id);
-    const probMats = materials.filter(m => ['exam-prep', 'assignment', 'lab'].includes(m.type));
+    const probMats = materials.filter(m => ['problemset', 'assignment', 'exam-prep', 'lab'].includes(materialSlot(m)));
     const dlg = document.createElement('dialog');
     dlg.style.minWidth = '560px';
     const STATUSES = ['todo', 'attempted', 'solved', 'reviewed'];
@@ -633,7 +696,9 @@ async function renderModule(idStr) {
     dlg.showModal();
   }
   view.querySelectorAll('.del-topic').forEach(b => b.addEventListener('click', async () => {
-    if (confirm('Delete topic?')) { await api.topicsDelete(Number(b.dataset.id)); route(); }
+    if (confirm('Delete section? Materials move to inbox.')) {
+      await api.topicsDelete(Number(b.dataset.id)); route();
+    }
   }));
   view.querySelectorAll('.merge-topic').forEach(b => b.addEventListener('click', async () => {
     const keepId = Number(b.dataset.id);
@@ -662,8 +727,8 @@ async function renderModule(idStr) {
     msg.textContent = '';
     // skip suggestions that already exist as topics
     const fresh = r.topics.filter(s => !topics.some(t => t.name.toLowerCase() === s.name.toLowerCase()));
-    if (!fresh.length) { msg.textContent = 'No new topics suggested.'; return; }
-    const picked = await reviewDialog(`AI topic suggestions for ${mod.code}`,
+    if (!fresh.length) { msg.textContent = 'No new sections suggested.'; return; }
+    const picked = await reviewDialog(`AI section suggestions for ${mod.code}`,
       fresh.map(s => ({ label: s.name, detail: s.summary || '' })), 'Add selected');
     if (!picked) return;
     for (const i of picked) {
@@ -674,10 +739,10 @@ async function renderModule(idStr) {
 
   const matFields = (m = {}) => [
     { name: 'title', label: 'Title', value: m.title },
-    { name: 'type', label: 'Type', type: 'select', value: m.type || 'lecture',
-      options: MATERIAL_TYPES.map(t => ({ value: t, label: t })) },
-    { name: 'topic_id', label: 'Topic', type: 'select', value: m.topic_id ?? '',
-      options: [{ value: '', label: '(none)' }, ...topics.map(t => ({ value: t.id, label: t.name }))] },
+    { name: 'type', label: 'Slot', type: 'select', value: materialSlot(m) || 'lecture',
+      options: SECTION_SLOTS.map(([v, label]) => ({ value: v, label })) },
+    { name: 'topic_id', label: 'Section', type: 'select', value: m.topic_id ?? '',
+      options: [{ value: '', label: '(inbox)' }, ...topics.map(t => ({ value: t.id, label: t.name }))] },
     { name: 'due_at', label: 'Due date (assignments)', type: 'date', value: m.due_at ? m.due_at.slice(0, 10) : '' },
     { name: 'path', label: 'Path / URL', value: m.path },
   ];
@@ -691,32 +756,20 @@ async function renderModule(idStr) {
   view.querySelector('#add-link').addEventListener('click', async () => {
     const d = await formDialog('Add material', matFields());
     if (d && d.title.trim()) {
-      await api.materialsCreate({ module_id: id, ...d, topic_id: d.topic_id ? Number(d.topic_id) : null,
-        due_at: d.due_at || null });
+      const payload = { module_id: id, ...d, topic_id: d.topic_id ? Number(d.topic_id) : null,
+        due_at: d.due_at || null };
+      if (d.topic_id && d.path) {
+        await api.materialsCreate(payload);
+        const mats = await api.materialsList(id);
+        const created = mats[mats.length - 1];
+        await api.materialsOrganize({ materialId: created.id, topicId: Number(d.topic_id), slot: d.type });
+      } else {
+        await api.materialsCreate(payload);
+      }
       route();
     }
   });
-  function bindMatButtons() {
-    view.querySelectorAll('.open-mat').forEach(a => a.addEventListener('click', (e) => {
-      e.preventDefault();
-      openMaterial(Number(a.dataset.id), a.textContent, a.dataset.path);
-    }));
-    view.querySelectorAll('.edit-mat').forEach(b => b.addEventListener('click', async () => {
-      const m = materials.find(x => x.id === Number(b.dataset.id));
-      const d = await formDialog('Edit material', matFields(m));
-      if (d) {
-        await api.materialsUpdate({ ...m, ...d, topic_id: d.topic_id ? Number(d.topic_id) : null,
-          due_at: d.due_at || null });
-        route();
-      }
-    }));
-    view.querySelectorAll('.del-mat').forEach(b => b.addEventListener('click', async () => {
-      if (confirm('Delete material entry? (file on disk is untouched)')) {
-        await api.materialsDelete(Number(b.dataset.id)); route();
-      }
-    }));
-  }
-  bindMatButtons();
+  bindSectionBoard();
 }
 
 // ---------- Problem queue ----------

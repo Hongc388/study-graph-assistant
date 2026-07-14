@@ -7,6 +7,7 @@ const db = require('./db');
 const { planDay } = require('./scheduler');
 const ai = require('./ai');
 const ingest = require('./ingest');
+const organize = require('./organize');
 const { isPreviewable } = require('./preview');
 
 const DEFAULT_ROOT = path.join(os.homedir(), 'Desktop', 'year_three');
@@ -164,6 +165,40 @@ function registerIpc() {
     'materials:create': (_, m) => db.createMaterial(m),
     'materials:update': (_, m) => db.updateMaterial(m),
     'materials:delete': (_, id) => db.deleteMaterial(id),
+    'materials:organize': (_, { materialId, topicId, slot }) => {
+      const mat = db.getMaterial(materialId);
+      if (!mat) throw new Error('Material not found');
+      const mod = db.listModules().find(m => m.id === mat.module_id);
+      if (!mod) throw new Error('Module not found');
+      const libRoot = db.getSetting('library_root') || DEFAULT_ROOT;
+      const slotNorm = organize.normalizeSlot(slot || mat.type);
+
+      if (!topicId) {
+        db.updateMaterial({ ...mat, topic_id: null, type: slotNorm });
+        return { ok: true, renamed: false, title: mat.title };
+      }
+
+      const topic = db.listTopics(mod.id).find(t => t.id === Number(topicId));
+      if (!topic) throw new Error('Section not found');
+
+      const reserved = db.listMaterials(mod.id).map(m => m.path).filter(Boolean);
+      const { path: newPath, title, renamed } = organize.organizeOnDisk({
+        libRoot,
+        moduleFolder: mod.folder || mod.code,
+        materialPath: mat.path,
+        sectionName: topic.name,
+        slot: slotNorm,
+        reservedPaths: reserved,
+      });
+      db.updateMaterial({
+        ...mat,
+        topic_id: Number(topicId),
+        type: slotNorm,
+        path: newPath,
+        title,
+      });
+      return { ok: true, renamed, path: newPath, title };
+    },
     'materials:search': (_, q, moduleId) => db.searchMaterials(q, moduleId),
     // pick files from disk to import as materials
     'materials:pickFiles': async () => {
