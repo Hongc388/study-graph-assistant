@@ -283,6 +283,24 @@ function renderTimerDisplay() {
     : '';
   el.innerHTML = `⏱ ${min}:${String(sec).padStart(2, '0')} ${esc(timer.title.slice(0, 28))}${paused} <a href="#" id="st-timer-stop" style="color:var(--danger)">■ stop</a>`;
   el.querySelector('#st-timer-stop').onclick = (e) => { e.preventDefault(); stopTimer(); };
+  pushPreviewTimer();
+}
+
+// Mirror the timer + pomodoro state into the preview window, where the actual
+// reading happens — the status bar down here is invisible behind a PDF.
+function pushPreviewTimer() {
+  if (!timer || timer.mode !== 'preview') return;
+  const state = { elapsedMs: timerElapsedMs(), paused: timer.paused, pomo: null };
+  if (pomo) {
+    const long = pomo.completed % pomo.cfg.cyclesPerLong === 0 && pomo.completed > 0;
+    state.pomo = {
+      phase: pomo.phase,
+      remainingMs: Pomodoro.phaseRemainingMs(pomo),
+      breakMin: long ? pomo.cfg.longBreakMin : pomo.cfg.shortBreakMin,
+      count: pomoStats.count,
+    };
+  }
+  api.previewTimerPush(state).catch(() => {});
 }
 
 async function openMaterial(materialId, title, path) {
@@ -418,6 +436,7 @@ function renderPomodoroDisplay() {
       renderPomodoroDisplay();
     };
   }
+  pushPreviewTimer();
 }
 
 // ---------- status bar ----------

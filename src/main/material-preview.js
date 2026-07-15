@@ -291,6 +291,32 @@
     updateHint();
   }
 
+  // ----- focus/pomodoro pill (state pushed from the main window each second) -----
+  const mmss = (ms) => {
+    const m = Math.floor(ms / 60000);
+    const s = String(Math.floor((ms % 60000) / 1000)).padStart(2, '0');
+    return `${m}:${s}`;
+  };
+
+  function renderTimerPill(state) {
+    const pill = document.getElementById('timer-pill');
+    if (!state) { pill.hidden = true; return; }
+    pill.hidden = false;
+    let html = `⏱ ${mmss(state.elapsedMs)}${state.paused ? ' <span class="dim">paused</span>' : ''}`;
+    if (state.pomo) {
+      if (state.pomo.phase === 'work') {
+        html += ` <span class="dim">·</span> 🍅 ${mmss(state.pomo.remainingMs)} to break`;
+      } else {
+        html += ` <span class="dim">·</span> <span class="brk">☕ break ${mmss(state.pomo.remainingMs)}</span>`;
+      }
+    }
+    pill.innerHTML = html;
+  }
+
+  function initTimerPill() {
+    if (api().onTimer) api().onTimer(renderTimerPill);
+  }
+
   async function boot() {
     if (!filePath) {
       document.body.textContent = 'Preview error: missing file';
@@ -303,6 +329,7 @@
       else if (ext === 'html') await openHtml();
       else await openText();
       await initNotesPanel();
+      initTimerPill();
     } catch (e) {
       document.body.textContent = `Preview error: ${e.message}`;
     }

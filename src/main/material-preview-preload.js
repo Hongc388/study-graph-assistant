@@ -10,4 +10,6 @@ contextBridge.exposeInMainWorld('previewApi', {
   notesDelete: (payload) => ipcRenderer.invoke('notes:deleteReading', payload),
   notesLink: (payload) => ipcRenderer.invoke('notes:linkReading', payload),
   notesUnlink: (payload) => ipcRenderer.invoke('notes:unlinkReading', payload),
+  onTimer: (cb) => ipcRenderer.on('preview:timer', (_, state) => cb(state)),
+  breakChoice: (accept) => ipcRenderer.invoke('preview:breakChoice', accept),
 });

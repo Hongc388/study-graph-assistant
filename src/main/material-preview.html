@@ -86,6 +86,18 @@
     .note-item .meta { font-size: 10.5px; color: var(--text-muted); margin-top: 3px; }
     .note-item .row { display: flex; justify-content: space-between; gap: 6px; align-items: flex-start; }
     .danger-ghost { background: transparent !important; border-color: transparent !important; color: var(--c-red) !important; }
+
+    /* Focus/pomodoro pill — mirrors the main window status bar, since while
+       reading this window covers it. Positioned over the content, top-right. */
+    #timer-pill {
+      position: fixed; top: 46px; right: 16px; z-index: 40;
+      background: var(--surface-1); border: 0.5px solid var(--border);
+      border-radius: 999px; padding: 5px 12px; font-size: 12px;
+      color: var(--text-primary); box-shadow: 0 2px 10px rgba(26,26,24,.10);
+      font-variant-numeric: tabular-nums; pointer-events: none; user-select: none;
+    }
+    #timer-pill .dim { color: var(--text-muted); }
+    #timer-pill .brk { color: var(--c-teal); font-weight: 600; }
     [hidden] { display: none !important; }
   </style>
 </head>
@@ -120,6 +132,7 @@
       </div>
     </aside>
   </div>
+  <div id="timer-pill" hidden></div>
   <script src="../../node_modules/pdfjs-dist/legacy/build/pdf.min.js"></script>
   <script src="../renderer/graphview.js"></script>
   <script src="material-preview.js"></script>

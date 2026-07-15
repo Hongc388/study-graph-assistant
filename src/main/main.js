@@ -547,6 +547,13 @@ function registerIpc() {
         return { ok: true };
       } catch (e) { return { ok: false, error: e.message }; }
     },
+    // Timer relay: the main window computes the focus/pomodoro display state
+    // every second; the preview window (where reading happens) renders it.
+    'preview:timerPush': (_, state) => {
+      if (previewWin && !previewWin.isDestroyed()) {
+        previewWin.webContents.send('preview:timer', state);
+      }
+    },
     // OS notification for renderer events (pomodoro done / break over). Shown
     // only when the window is unfocused — in focus the in-app toast suffices.
     'notify:show': async (_, n) => {
