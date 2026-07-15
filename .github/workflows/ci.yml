@@ -131,3 +131,29 @@ jobs:
           unset ELECTRON_RUN_AS_NODE
           xvfb-run -a npx electron . --smoke --no-sandbox 2>&1 | tee smoke.log
           grep -q SMOKE_OK smoke.log
+
+  # package → asar/path bugs the dev-mode smoke can't see: a file that resolves
+  # via node_modules in the repo can vanish or move inside the packaged .app
+  # (native modules must be unpacked, pdf.js worker loaded by absolute path, …).
+  package:
+    name: Packaged app boots (electron-builder)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Full install
+        run: npm ci
+        env:
+          npm_config_optional: false
+      - name: Build unpacked .app (unsigned)
+        run: npm run pack
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Smoke-test the packaged binary
+        run: |
+          "./dist/mac-arm64/Study Graph Assistant.app/Contents/MacOS/Study Graph Assistant" --smoke 2>&1 | tee smoke.log
+          grep -q SMOKE_OK smoke.log

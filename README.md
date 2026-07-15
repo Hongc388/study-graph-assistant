@@ -38,6 +38,27 @@ ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electr
 Check the exact version needed with
 `node -p "require('./node_modules/electron/package.json').version"`.
 
+## Build a distributable app
+
+```sh
+npm run pack   # fast: unsigned .app in dist/mac-arm64 (good for local testing)
+npm run dist   # full: .dmg + .zip in dist/
+```
+
+Builds are unsigned for now (`identity: null`), so on another Mac the first
+launch needs right-click → Open. If the electron-builder downloads crawl, the
+same mirror trick as above works:
+
+```sh
+ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ \
+ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ \
+npm run dist
+```
+
+CI's `package` job builds the .app on every push and boots it with `--smoke`,
+so asar/path regressions (native modules, the pdf.js worker) are caught before
+they reach a release.
+
 ## Optional AI
 
 Install [Ollama](https://ollama.com), then:

@@ -8,15 +8,38 @@
     "test": "node test/run.js",
     "rebuild": "electron-rebuild -f -o better-sqlite3",
     "postinstall": "electron-rebuild -f -o better-sqlite3",
+    "dist": "electron-builder",
+    "pack": "electron-builder --dir",
     "ingest:dry-run": "node -e \"const i=require('./src/main/ingest');const r=i.scanRoot(process.argv[1]||process.env.HOME+'/Desktop/year_three');for(const m of r.modules)console.log(m.code.padEnd(10),m.files.length+' files,',m.topicSuggestions.length+' topic suggestions');console.log('strategy:',r.strategyPath)\""
   },
   "engines": {
     "node": ">=20"
   },
+  "build": {
+    "appId": "com.hongchengli.study-graph-assistant",
+    "productName": "Study Graph Assistant",
+    "files": [
+      "src/**/*",
+      "!**/*.map"
+    ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**",
+      "node_modules/pdfjs-dist/**"
+    ],
+    "mac": {
+      "category": "public.app-category.education",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "identity": null
+    }
+  },
   "license": "MIT",
   "devDependencies": {
     "@electron/rebuild": "^3.6.0",
-    "electron": "^33.4.11"
+    "electron": "^33.4.11",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
     "better-sqlite3": "^11.5.0",
