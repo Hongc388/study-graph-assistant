@@ -598,7 +598,7 @@ function reorderBlocks({ date, status, orderedIds }) {
 // ---------- ingest (idempotent: re-running updates, never duplicates) ----------
 // scan = output of ingest.scanRoot(); strategy = ingest.parseStrategy() or null.
 function applyIngest(scan, strategy, opts = {}) {
-  const todayIso = opts.today || new Date().toISOString().slice(0, 10);
+  const todayIso = opts.today || localDateToday();
   const tx = db.transaction(() => {
     const stats = { modules: 0, materials: 0, updated: 0, removed: 0,
                     topics: 0, tips: 0, deadlines: 0, spineEdges: 0 };
@@ -790,23 +790,36 @@ const cardCounts = (nowIso) => all(`
   GROUP BY t.id`, nowIso || new Date().toISOString());
 
 // ---------- pomodoro log ----------
+// Today's count + streak of consecutive local calendar days with ≥1 pomodoro.
+// Dates are YYYY-MM-DD local (same convention as study blocks / reminders).
+function shiftLocalDate(dateStr, deltaDays) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + deltaDays);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+function localDateToday() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 const logPomodoro = (p) =>
   run('INSERT INTO pomodoro_log (date, completed_at, material_id, work_min) VALUES (?,?,?,?)',
-    p.date || new Date().toISOString().slice(0, 10), new Date().toISOString(),
+    p.date || localDateToday(), new Date().toISOString(),
     p.material_id || null, p.work_min).lastInsertRowid;
 
-// Today's count + streak of consecutive days (ending today or yesterday) with ≥1 pomodoro.
 function pomodoroStats(today) {
-  const date = today || new Date().toISOString().slice(0, 10);
+  const date = today || localDateToday();
   const count = get('SELECT COUNT(*) AS n FROM pomodoro_log WHERE date=?', date)?.n ?? 0;
   const days = all('SELECT DISTINCT date FROM pomodoro_log ORDER BY date DESC').map(r => r.date);
   let streak = 0;
-  let cursor = new Date(date + 'T00:00:00Z');
-  if (!days.includes(date)) cursor.setUTCDate(cursor.getUTCDate() - 1); // today not broken yet
-  for (const d of days.filter(d => d <= cursor.toISOString().slice(0, 10))) {
-    if (d !== cursor.toISOString().slice(0, 10)) break;
+  let cursor = days.includes(date) ? date : shiftLocalDate(date, -1);
+  for (const d of days) {
+    if (d > cursor) continue;
+    if (d !== cursor) break;
     streak++;
-    cursor.setUTCDate(cursor.getUTCDate() - 1);
+    cursor = shiftLocalDate(cursor, -1);
   }
   return { date, count, streak };
 }

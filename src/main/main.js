@@ -208,7 +208,30 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-function checkReminders(now = new Date()) {
+function showOsNotification(title, body) {
+  return new Promise((resolve) => {
+    if (!Notification.isSupported()) return resolve(false);
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      resolve(ok);
+    };
+    try {
+      const n = new Notification({ title: String(title || ''), body: String(body || '') });
+      n.once('show', () => finish(true));
+      n.once('failed', () => finish(false));
+      n.show();
+      // Darwin always emits show/failed; elsewhere some hosts are silent — treat
+      // "no failure" as delivered so we don't re-spam every minute.
+      setTimeout(() => finish(process.platform !== 'darwin'), 2000);
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+async function checkReminders(now = new Date()) {
   try {
     if (!Notification.isSupported()) return;
     const prefs = reminders.normalizePrefs(db.getSetting('reminders.prefs'));
@@ -221,15 +244,21 @@ function checkReminders(now = new Date()) {
       deadlines: db.listDeadlines(),
       dueCards: db.cardCounts(now.toISOString()).reduce((n, r) => n + (r.due || 0), 0),
       blocks: db.listBlocks(today),
-      stats: db.pomodoroStats(),
+      stats: db.pomodoroStats(today),
     });
     if (!due.length) return;
+    let changed = false;
     for (const r of due) {
-      new Notification({ title: r.title, body: r.body }).show();
+      const delivered = await showOsNotification(r.title, r.body);
+      if (!delivered) {
+        log.info('reminders', `not delivered (${r.category}): ${r.title}`);
+        continue;
+      }
       sent[r.key] = today;
+      changed = true;
       log.info('reminders', `${r.category}: ${r.title}`);
     }
-    db.setSetting('reminders.sent', JSON.stringify(reminders.pruneSent(sent, now)));
+    if (changed) db.setSetting('reminders.sent', JSON.stringify(reminders.pruneSent(sent, now)));
   } catch (e) { log.error('reminders', e); }
 }
 
@@ -407,7 +436,7 @@ function registerIpc() {
       db.unlinkReadingNotes(id);
       return db.getReadingNoteGraph(materialId);
     },
-    'study:todayLog': (_, date) => db.listStudyToday(date || new Date().toISOString().slice(0, 10)),
+    'study:todayLog': (_, date) => db.listStudyToday(date || reminders.localDateStr(new Date())),
     'study:resume': (_, limit) => db.listResumeItems(Math.min(limit ?? 8, db.MAX_RECENT_ACCESS)),
     'study:recentAccessMax': () => db.MAX_RECENT_ACCESS,
     // flashcards (SM-2 spaced repetition)
@@ -520,12 +549,11 @@ function registerIpc() {
     },
     // OS notification for renderer events (pomodoro done / break over). Shown
     // only when the window is unfocused — in focus the in-app toast suffices.
-    'notify:show': (_, n) => {
+    'notify:show': async (_, n) => {
       const prefs = reminders.normalizePrefs(db.getSetting('reminders.prefs'));
       if (!prefs.enabled || !prefs.pomodoro) return false;
       if (mainWin?.isFocused() || !Notification.isSupported()) return false;
-      new Notification({ title: String(n?.title || ''), body: String(n?.body || '') }).show();
-      return true;
+      return showOsNotification(n?.title, n?.body);
     },
     // crash log (renderer exceptions land in the same file as main's)
     'log:renderer': (_, e) => log.error('renderer.uncaught',
