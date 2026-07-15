@@ -17,7 +17,7 @@ async function pdfText(filePath, maxChars) {
   const pages = Math.min(MAX_PDF_PAGES, doc.numPages);
   for (let p = 1; p <= pages && text.length < maxChars; p++) {
     const tc = await (await doc.getPage(p)).getTextContent();
-    text += tc.items.map(i => i.str).join(' ') + '\n';
+    text += tc.items.map(i => ('str' in i ? i.str : '')).join(' ') + '\n';
   }
   await doc.destroy();
   return text;

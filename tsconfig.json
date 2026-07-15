@@ -1,0 +1,22 @@
+{
+  // Type-checks the plain-JS main process and shared engines (no emit, no
+  // rewrite). Deliberately lenient — checkJs without strict — so it catches
+  // real bugs (null derefs, wrong argument counts, typo'd properties) without
+  // demanding annotations everywhere. The renderer can join later.
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "target": "es2022",
+    "module": "commonjs",
+    "strict": false,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "types": ["node"]
+  },
+  "include": ["src/main/**/*.js", "src/shared/**/*.js"],
+  // material-preview.js runs in the preview BrowserWindow (DOM context, not
+  // Node) — it needs the dom lib and element casts; it joins with the renderer.
+  "exclude": ["src/main/material-preview.js"]
+}

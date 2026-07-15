@@ -80,6 +80,8 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
       - name: Run unit tests
         run: npm test
+      - name: Type-check main process and shared engines
+        run: npm run typecheck
 
   native-build:
     name: Native module rebuild (Electron ABI)

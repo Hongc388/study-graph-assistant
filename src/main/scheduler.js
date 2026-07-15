@@ -17,13 +17,13 @@ const DAY_MS = 24 * 3600 * 1000;
 
 /**
  * Build a plan for one day.
- * @param opts {
- *   date: 'YYYY-MM-DD',
- *   windows: [{start_min, end_min}],   // available time, minutes since midnight
- *   topics, edges, deadlines, materials, // straight from db (topic mastery is derived)
- *   modules?  // [{id, spent_min, target_hours}] for the hour-budget deficit term
- * }
- * @returns [{start_min, end_min, topic_id, material_id, reason}]
+ *
+ * opts: date 'YYYY-MM-DD'; windows [{start_min, end_min}] — available time in
+ * minutes since midnight; topics/edges/deadlines/materials straight from db
+ * (topic mastery is derived); optional modules [{id, spent_min, target_hours}]
+ * for the hour-budget deficit term.
+ *
+ * Returns [{start_min, end_min, topic_id, material_id, reason}].
  */
 function planDay(opts) {
   const { date, windows, topics, edges, deadlines, materials, modules = [] } = opts;

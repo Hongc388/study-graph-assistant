@@ -35,6 +35,7 @@ const MAX_FILES_PER_MODULE = 400;
 // Topics are a curated spine, not a folder mirror — not every file gets a node.
 const MAX_TOPICS_PER_MODULE = 25;
 
+/** @type {[RegExp, string][]} */
 const TYPE_BY_HINT = [
   // course-description files, not study content ("01-introduction.pdf" is NOT
   // matched — that's usually a real first lecture; the AI type check covers it)
@@ -147,7 +148,8 @@ function scanRoot(root) {
       !topicSuggestions.some(b => b !== a &&
         b.name.toLowerCase().startsWith(a.name.toLowerCase()) && b.name.length > a.name.length));
     // Spine topics first, then cap — the rest stay reachable as materials.
-    topicSuggestions.sort((a, b) => (a.seq == null) - (b.seq == null) || (a.seq ?? 0) - (b.seq ?? 0));
+    topicSuggestions.sort((a, b) =>
+      Number(a.seq == null) - Number(b.seq == null) || (a.seq ?? 0) - (b.seq ?? 0));
     topicSuggestions = topicSuggestions.slice(0, MAX_TOPICS_PER_MODULE);
     out.modules.push({ folder: e.name, ...known, files, topicSuggestions });
   }
