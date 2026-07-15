@@ -1030,7 +1030,7 @@ async function renderModule(idStr) {
     // Distill the dropped file into labeled facts (slow local model — runs in
     // the background; the view refreshes when it lands, if still open).
     const ai = await api.aiStatus();
-    if (!ai.ok) return;
+    if (!ai.ok) { toastStatus('AI offline — key info not extracted (file moved anyway)'); return; }
     toastStatus(`✨ reading ${mat.title}… (local AI, ~30s)`);
     const r = await api.aiSummarizeOverview({ moduleId: id, materialId: mat.id });
     toastStatus(r.ok ? `✨ ${r.count} key facts extracted from ${mat.title}`

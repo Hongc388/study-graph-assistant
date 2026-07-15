@@ -492,7 +492,10 @@ function registerIpc() {
         db.setAboutNotes(moduleId, items, mat.title);
         log.info('ai', `about summary for module ${moduleId} from "${mat.title}" (${items.length} facts)`);
         return { ok: true, count: items.length };
-      } catch (e) { return { ok: false, error: e.message }; }
+      } catch (e) {
+        log.warn('ai', `about summary failed for module ${moduleId}: ${e.message}`);
+        return { ok: false, error: e.message };
+      }
     },
     'ai:classifyModule': async (ev, moduleId) => {
       try {
