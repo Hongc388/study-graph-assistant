@@ -65,6 +65,16 @@ Every accept/reject decision is logged (`ai_feedback` table) and fed back into
 future prompts as examples, so suggestions adapt to your judgment over time —
 and the log doubles as a training dataset if the model is ever fine-tuned.
 
+## Data safety
+
+The database is one SQLite file under the Electron user-data dir. The app
+protects it three ways: a rotating **daily backup** (last 5 kept in
+`backups/`), an automatic **pre-migration copy** whenever a schema upgrade is
+about to run (`PRAGMA user_version` tracks the schema), and manual
+**Export / Restore** buttons in Settings. Restore keeps the replaced database
+as `.pre-import` so it's reversible. Crashes are recorded to a local log file
+(Settings → Open log file) — nothing is ever uploaded.
+
 ## Flashcards (spaced repetition)
 
 The **▧ Flashcards** view reviews cards with the SM-2 algorithm: rate a card

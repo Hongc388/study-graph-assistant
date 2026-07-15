@@ -1998,6 +1998,16 @@ async function renderSettings() {
       </div>
     </div>
     <div class="panel">
+      <h3 style="margin-top:0">Data &amp; backups</h3>
+      <p class="muted">Everything lives in one local database file. The app keeps a rotating daily
+        backup automatically, and copies the file aside before any schema upgrade. Export gives you
+        an off-machine copy; Restore replaces all current data with an exported backup.</p>
+      <div class="row" style="margin-top:6px">
+        <button id="db-export">Export backup…</button>
+        <button id="db-import" class="danger-ghost">Restore from backup…</button>
+      </div>
+    </div>
+    <div class="panel">
       <h3 style="margin-top:0">Troubleshooting</h3>
       <p class="muted">Crashes and unexpected errors are recorded to a local log file (never uploaded).</p>
       <button id="open-log">Open log file</button>
@@ -2024,6 +2034,18 @@ async function renderSettings() {
   });
   view.querySelector('#run-index').addEventListener('click', () => runIngest());
   view.querySelector('#open-log').addEventListener('click', () => api.logReveal());
+  view.querySelector('#db-export').addEventListener('click', async () => {
+    const r = await api.dbExport();
+    if (r.ok) toastStatus(`backup saved to ${r.path}`);
+    else if (r.error !== 'canceled') toastStatus(`export failed: ${r.error}`);
+  });
+  view.querySelector('#db-import').addEventListener('click', async () => {
+    if (!confirm('Restore from a backup?\n\nThis REPLACES all current data with the '
+      + 'backup’s contents. The current database is kept aside as a safety copy.')) return;
+    const r = await api.dbImport();
+    // on success the window reloads by itself; only failures need a message
+    if (!r.ok && r.error !== 'canceled') toastStatus(`restore failed: ${r.error}`);
+  });
 }
 
 // ---------- boot ----------

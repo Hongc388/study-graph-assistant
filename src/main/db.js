@@ -1,16 +1,82 @@
 // SQLite layer: schema + all query helpers.
 // One database file lives in Electron's userData directory so it survives app updates.
 const path = require('path');
+const fs = require('fs');
 const Database = require('better-sqlite3');
 
+// Bump this whenever migrate() gains a new schema change. A version mismatch
+// on open means "this file is about to be migrated" — so the old file is
+// copied aside first. The database IS the user's study history; a botched
+// migration must never be able to destroy the only copy.
+const SCHEMA_VERSION = 1;
+const BACKUP_KEEP = 5; // rotating daily backups under userData/backups
+
 let db;
+let dbPath = null;
+let dataDir = null;
 
 function open(userDataDir) {
-  db = new Database(path.join(userDataDir, 'study-graph.db'));
+  dataDir = userDataDir;
+  dbPath = path.join(userDataDir, 'study-graph.db');
+  const existed = fs.existsSync(dbPath);
+  db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  const oldV = db.pragma('user_version', { simple: true });
+  if (existed && oldV !== SCHEMA_VERSION) {
+    safeCopy(path.join(userDataDir, `study-graph.pre-migrate-v${oldV}.db`));
+  }
   migrate();
+  db.pragma(`user_version = ${SCHEMA_VERSION}`);
+  if (existed) rotatingBackup();
   return db;
+}
+
+function close() {
+  if (db) { db.close(); db = null; }
+}
+
+// Copy the live database to `dest`. WAL means recent commits live in a side
+// file, so checkpoint into the main file first — a plain copy would silently
+// miss the newest writes.
+function safeCopy(dest) {
+  db.pragma('wal_checkpoint(TRUNCATE)');
+  fs.copyFileSync(dbPath, dest);
+  return dest;
+}
+
+// One backup per calendar day, oldest pruned beyond BACKUP_KEEP.
+function rotatingBackup() {
+  const dir = path.join(dataDir, 'backups');
+  fs.mkdirSync(dir, { recursive: true });
+  const dest = path.join(dir, `study-graph-${new Date().toISOString().slice(0, 10)}.db`);
+  if (!fs.existsSync(dest)) {
+    safeCopy(dest);
+    const dated = fs.readdirSync(dir).filter(f => /^study-graph-\d{4}-\d{2}-\d{2}\.db$/.test(f)).sort();
+    for (const f of dated.slice(0, Math.max(0, dated.length - BACKUP_KEEP))) {
+      fs.unlinkSync(path.join(dir, f));
+    }
+  }
+  return dest;
+}
+
+const exportTo = (dest) => safeCopy(dest);
+
+/** Replace the live database with `src` (a previously exported backup).
+ *  The current file is kept as .pre-import so a bad restore is reversible. */
+function importFrom(src) {
+  const probe = new Database(src, { readonly: true, fileMustExist: true });
+  let isOurs;
+  try {
+    isOurs = probe.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='modules'").get();
+  } finally { probe.close(); }
+  if (!isOurs) throw new Error('Not a Study Graph database (no modules table)');
+  safeCopy(dbPath + '.pre-import');
+  close();
+  fs.copyFileSync(src, dbPath);
+  // Stale WAL/SHM from the old database must not shadow the imported file.
+  for (const suffix of ['-wal', '-shm']) fs.rmSync(dbPath + suffix, { force: true });
+  return open(dataDir); // reopen + migrate the imported file to current schema
 }
 
 function migrate() {
@@ -751,7 +817,7 @@ const setSetting = (key, value) =>
   run('INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', key, value);
 
 module.exports = {
-  open,
+  open, close, exportTo, importFrom, SCHEMA_VERSION, BACKUP_KEEP,
   listModules, createModule, updateModule, deleteModule,
   listTopics, createTopic, updateTopic, deleteTopic, mergeTopics,
   listProblemQueue,

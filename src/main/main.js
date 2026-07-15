@@ -452,6 +452,33 @@ function registerIpc() {
       } catch (e) { return { ok: false, error: e.message }; }
     },
     'ai:feedback': (_, f) => db.logAiFeedback(f),
+    // data safety: user-driven backup and restore of the whole database
+    'db:export': async () => {
+      const { canceled, filePath } = await dialog.showSaveDialog(mainWin, {
+        title: 'Export database backup',
+        defaultPath: `study-graph-backup-${new Date().toISOString().slice(0, 10)}.db`,
+      });
+      if (canceled || !filePath) return { ok: false, error: 'canceled' };
+      try {
+        db.exportTo(filePath);
+        log.info('db', `exported backup to ${filePath}`);
+        return { ok: true, path: filePath };
+      } catch (e) { return { ok: false, error: e.message }; }
+    },
+    'db:import': async () => {
+      const { canceled, filePaths } = await dialog.showOpenDialog(mainWin, {
+        title: 'Restore database from a backup (replaces current data)',
+        filters: [{ name: 'SQLite database', extensions: ['db'] }],
+        properties: ['openFile'],
+      });
+      if (canceled || !filePaths.length) return { ok: false, error: 'canceled' };
+      try {
+        db.importFrom(filePaths[0]);
+        log.info('db', `imported database from ${filePaths[0]}`);
+        mainWin.webContents.reload(); // renderer state is all derived from the DB
+        return { ok: true };
+      } catch (e) { return { ok: false, error: e.message }; }
+    },
     // crash log (renderer exceptions land in the same file as main's)
     'log:renderer': (_, e) => log.error('renderer.uncaught',
       `${e?.message || 'unknown'}${e?.stack ? '\n' + e.stack : ''}`),
