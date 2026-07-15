@@ -6,7 +6,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com); versions follow
 
 ## [Unreleased]
 
+### Changed
+- The calm palette is one step lighter (same hues): near-white surfaces,
+  brighter accents; stored module colors are remapped once on upgrade.
+- A completed pomodoro no longer starts the break by itself — it asks first
+  (in the preview window if open, else a native dialog). Accepting freezes
+  the reading behind a countdown; declining continues the work uninterrupted.
+
 ### Added
+- The focus/pomodoro timer now also shows inside the material preview window,
+  where the actual reading happens.
 - Custom app icon (a learning-path graph mark), rendered from an SVG source
   into the macOS `.icns` by `scripts/make-icns.sh`.
 - Study reminder notifications — deadlines (3 days / 1 day / on the day),
