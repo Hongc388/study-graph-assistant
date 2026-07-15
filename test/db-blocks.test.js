@@ -68,6 +68,35 @@ test('marking a block done logs study and material session time', (t) => {
   db.deleteBlock(id);
 });
 
+test('updateBlock edits time, topic, material and note but not status', (t) => {
+  if (skipDb) return t.skip('better-sqlite3 not built for this Node ABI (OK under Electron rebuild)');
+  const date = '2026-07-17';
+  const topic = db.listTopics()[0];
+  const mat = db.listMaterials()[0];
+  const id = db.createBlock({
+    date,
+    start_min: 9 * 60,
+    end_min: 10 * 60,
+    topic_id: topic.id,
+    reason: 'first draft',
+  });
+  db.updateBlock({
+    id,
+    start_min: 16 * 60,
+    end_min: 17 * 60 + 30,
+    topic_id: topic.id,
+    material_id: mat.id,
+    reason: 'moved to the afternoon',
+  });
+  const b = db.listBlocks(date).find(x => x.id === id);
+  assert.strictEqual(b.start_min, 16 * 60);
+  assert.strictEqual(b.end_min, 17 * 60 + 30);
+  assert.strictEqual(b.material_id, mat.id);
+  assert.strictEqual(b.reason, 'moved to the afternoon');
+  assert.strictEqual(b.status, 'planned', 'editing never flips status');
+  db.deleteBlock(id);
+});
+
 test('duplicate block creates a new planned row', (t) => {
   if (skipDb) return t.skip('better-sqlite3 not built for this Node ABI (OK under Electron rebuild)');
   const date = '2026-07-16';
@@ -105,6 +134,7 @@ test('reorder blocks updates sort order within a column', (t) => {
 test('material progress saves page and scroll position', (t) => {
   if (skipDb) return t.skip('better-sqlite3 not built for this Node ABI (OK under Electron rebuild)');
   const mat = db.listMaterials()[0];
+  db.touchMaterialOpened(mat.id); // resume list only shows opened materials
   db.saveMaterialProgress(mat.id, { last_page: 12 });
   let row = db.getMaterial(mat.id);
   assert.strictEqual(row.last_page, 12);

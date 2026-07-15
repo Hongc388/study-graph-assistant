@@ -115,6 +115,40 @@ function migrate() {
     kind TEXT NOT NULL DEFAULT 'related',
     UNIQUE (from_note, to_note)
   );
+  CREATE TABLE IF NOT EXISTS cards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+    front TEXT NOT NULL,
+    back TEXT DEFAULT '',
+    ease REAL NOT NULL DEFAULT 2.5,
+    interval_days REAL NOT NULL DEFAULT 0,
+    reps INTEGER NOT NULL DEFAULT 0,
+    lapses INTEGER NOT NULL DEFAULT 0,
+    due_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    suspended INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS card_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+    reviewed_at TEXT NOT NULL,
+    rating INTEGER NOT NULL CHECK (rating BETWEEN 0 AND 3),
+    interval_days REAL NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS pomodoro_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    material_id INTEGER REFERENCES materials(id) ON DELETE SET NULL,
+    work_min INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS ai_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    accepted INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
   `);
   // Additive migrations for databases created before these columns existed.
   const addCol = (table, col, decl) => {
@@ -177,19 +211,9 @@ const updateModule = (m) =>
 const deleteModule = (id) => run('DELETE FROM modules WHERE id=?', id);
 
 // ---------- topics ----------
-// Mastery is DERIVED, never typed in:
-//   with problems tagged:  (solved|reviewed + 0.3×attempted) / total  — competence
-//   without problems:      exposure proxy from logged time on linked materials,
-//                          capped at 0.6 so reading alone never looks "mastered"
-//                          (5h of logged time reaches the cap).
-const EXPOSURE_CAP = 0.6;
-const EXPOSURE_FULL_MIN = 300;
-function deriveMastery(row) {
-  if (row.problem_count > 0) {
-    return Math.min(1, (row.solved_count + 0.3 * row.attempted_count) / row.problem_count);
-  }
-  return Math.min(EXPOSURE_CAP, (row.exposure_min / EXPOSURE_FULL_MIN) * EXPOSURE_CAP);
-}
+// Readiness rule (problems vs study time) lives in shared/mastery.js — pure
+// and unit-tested; listTopics attaches mastery + both components to each row.
+const { deriveMastery } = require('../shared/mastery');
 const TOPIC_SQL = `
   SELECT t.id, t.module_id, t.name, t.summary,
     (SELECT COUNT(*) FROM problems p WHERE p.topic_id = t.id) AS problem_count,
@@ -202,7 +226,7 @@ const listTopics = (moduleId) => {
   const rows = moduleId
     ? all(TOPIC_SQL + ' WHERE t.module_id=? ORDER BY t.name', moduleId)
     : all(TOPIC_SQL + ' ORDER BY t.module_id, t.name');
-  return rows.map(r => ({ ...r, mastery: deriveMastery(r) }));
+  return rows.map(r => ({ ...r, ...deriveMastery(r) }));
 };
 const createTopic = (t) =>
   run('INSERT INTO topics (module_id, name, summary) VALUES (?,?,?)',
@@ -286,9 +310,12 @@ const createMaterialSession = (s) =>
 
 // ---------- materials ----------
 // Spine-numbered files first, in curriculum order; the rest alphabetically.
+const MAT_SQL = `SELECT m.*,
+  (SELECT COUNT(*) FROM reading_notes rn WHERE rn.material_id = m.id) AS note_count
+  FROM materials m`;
 const listMaterials = (moduleId) => moduleId
-  ? all('SELECT * FROM materials WHERE module_id=? ORDER BY (seq IS NULL), seq, title', moduleId)
-  : all('SELECT * FROM materials ORDER BY module_id, (seq IS NULL), seq, title');
+  ? all(MAT_SQL + ' WHERE m.module_id=? ORDER BY (m.seq IS NULL), m.seq, m.title', moduleId)
+  : all(MAT_SQL + ' ORDER BY m.module_id, (m.seq IS NULL), m.seq, m.title');
 const createMaterial = (m) =>
   run('INSERT INTO materials (module_id, topic_id, path, type, title, due_at) VALUES (?,?,?,?,?,?)',
     m.module_id, m.topic_id || null, m.path || '', m.type || 'lecture', m.title, m.due_at || null).lastInsertRowid;
@@ -302,8 +329,9 @@ const getMaterial = (id) => get('SELECT * FROM materials WHERE id=?', id);
 const MAX_RECENT_ACCESS = 12;
 
 function pruneRecentAccess(keep = MAX_RECENT_ACCESS) {
+  // id DESC tie-break: same-millisecond opens (bulk touch) must prune oldest-first
   const keepers = all(
-    'SELECT id FROM materials WHERE last_opened_at IS NOT NULL ORDER BY last_opened_at DESC LIMIT ?',
+    'SELECT id FROM materials WHERE last_opened_at IS NOT NULL ORDER BY last_opened_at DESC, id DESC LIMIT ?',
     keep
   ).map(r => r.id);
   if (!keepers.length) {
@@ -316,7 +344,12 @@ function pruneRecentAccess(keep = MAX_RECENT_ACCESS) {
 }
 
 function touchMaterialOpened(id) {
-  run('UPDATE materials SET last_opened_at=? WHERE id=?', new Date().toISOString(), id);
+  // Strictly increasing timestamps: ISO strings have millisecond resolution, so
+  // rapid opens could tie and make the LRU order (and pruning) arbitrary.
+  let ts = new Date().toISOString();
+  const max = get('SELECT MAX(last_opened_at) AS m FROM materials')?.m;
+  if (max && ts <= max) ts = new Date(new Date(max).getTime() + 1).toISOString();
+  run('UPDATE materials SET last_opened_at=? WHERE id=?', ts, id);
   pruneRecentAccess(MAX_RECENT_ACCESS);
 }
 
@@ -365,12 +398,13 @@ const listResumeItems = (limit = 8) => all(`
          mo.id AS module_id, mo.code AS module_code, mo.color AS module_color,
          (SELECT COUNT(*) FROM problems p WHERE p.topic_id = t.id) AS problem_count,
          (SELECT COUNT(*) FROM problems p WHERE p.topic_id = t.id AND p.status IN ('solved','reviewed')) AS solved_count,
-         (SELECT COALESCE(SUM(s.duration_min), 0) FROM material_sessions s WHERE s.material_id = m.id) AS total_min
+         (SELECT COALESCE(SUM(s.duration_min), 0) FROM material_sessions s WHERE s.material_id = m.id) AS total_min,
+         (SELECT COUNT(*) FROM reading_notes rn WHERE rn.material_id = m.id) AS note_count
   FROM materials m
   JOIN modules mo ON mo.id = m.module_id
   LEFT JOIN topics t ON t.id = m.topic_id
   WHERE m.last_opened_at IS NOT NULL
-  ORDER BY m.last_opened_at DESC
+  ORDER BY m.last_opened_at DESC, m.id DESC
   LIMIT ?`, limit);
 const searchMaterials = (q, moduleId) => {
   const like = `%${q}%`;
@@ -424,6 +458,11 @@ const createBlock = (b) => {
   ).lastInsertRowid;
 };
 const getBlock = (id) => get('SELECT * FROM study_blocks WHERE id=?', id);
+// Edit time/topic/material/note in place; status changes stay with setBlockStatus
+// so the session-logging rules there can't be bypassed.
+const updateBlock = (b) =>
+  run('UPDATE study_blocks SET start_min=?, end_min=?, topic_id=?, material_id=?, reason=? WHERE id=?',
+    b.start_min, b.end_min, b.topic_id, b.material_id || null, b.reason || '', b.id);
 const duplicateBlock = (id) => {
   const b = getBlock(id);
   if (!b) return null;
@@ -624,6 +663,88 @@ const getReadingNoteGraph = (materialId) => ({
   links: listReadingNoteLinks(materialId),
 });
 
+// ---------- AI feedback log ----------
+// Every accepted/rejected AI suggestion is recorded. Recent entries go back
+// into future prompts as few-shot examples, and the log doubles as a training
+// dataset if the model is ever fine-tuned on this user's decisions.
+const logAiFeedback = (f) =>
+  run('INSERT INTO ai_feedback (kind, payload, accepted, created_at) VALUES (?,?,?,?)',
+    f.kind, JSON.stringify(f.payload ?? {}), f.accepted ? 1 : 0, new Date().toISOString()).lastInsertRowid;
+const listAiFeedback = (kind, limit = 12) =>
+  all('SELECT * FROM ai_feedback WHERE kind=? ORDER BY id DESC LIMIT ?', kind, limit)
+    .map(r => ({ ...r, accepted: !!r.accepted, payload: JSON.parse(r.payload) }));
+
+// ---------- flashcards (SM-2 spaced repetition) ----------
+const srs = require('../shared/srs');
+
+const CARD_SQL = `
+  SELECT c.*, t.name AS topic_name, t.module_id,
+         m.code AS module_code, m.color AS module_color
+  FROM cards c
+  JOIN topics t ON t.id = c.topic_id
+  JOIN modules m ON m.id = t.module_id`;
+const listCards = (topicId) => topicId
+  ? all(CARD_SQL + ' WHERE c.topic_id=? ORDER BY c.due_at', topicId)
+  : all(CARD_SQL + ' ORDER BY c.due_at');
+const listDueCards = (nowIso, limit = 50) =>
+  all(CARD_SQL + ' WHERE c.suspended=0 AND c.due_at <= ? ORDER BY c.due_at LIMIT ?',
+    nowIso || new Date().toISOString(), limit);
+const createCard = (c) => {
+  const fresh = srs.newCardState();
+  return run(
+    'INSERT INTO cards (topic_id, front, back, ease, interval_days, reps, lapses, due_at, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
+    c.topic_id, c.front.trim(), c.back || '', fresh.ease, fresh.interval_days,
+    fresh.reps, fresh.lapses, fresh.due_at, new Date().toISOString()).lastInsertRowid;
+};
+const updateCard = (c) =>
+  run('UPDATE cards SET front=?, back=?, topic_id=?, suspended=? WHERE id=?',
+    c.front.trim(), c.back || '', c.topic_id, c.suspended ? 1 : 0, c.id);
+const deleteCard = (id) => run('DELETE FROM cards WHERE id=?', id);
+
+// Rate a due card: SM-2 computes the next state, the review is logged.
+function reviewCard(id, rating, now = Date.now()) {
+  const card = get('SELECT * FROM cards WHERE id=?', id);
+  if (!card) throw new Error('Card not found');
+  const next = srs.review(card, rating, now);
+  const tx = db.transaction(() => {
+    run('UPDATE cards SET ease=?, interval_days=?, reps=?, lapses=?, due_at=? WHERE id=?',
+      next.ease, next.interval_days, next.reps, next.lapses, next.due_at, id);
+    run('INSERT INTO card_reviews (card_id, reviewed_at, rating, interval_days) VALUES (?,?,?,?)',
+      id, new Date(now).toISOString(), rating, next.interval_days);
+  });
+  tx();
+  return get(CARD_SQL + ' WHERE c.id=?', id);
+}
+
+// Due/total per topic — badges for module pages and the Today view.
+const cardCounts = (nowIso) => all(`
+  SELECT t.id AS topic_id, t.module_id, COUNT(*) AS total,
+         SUM(CASE WHEN c.suspended=0 AND c.due_at <= ? THEN 1 ELSE 0 END) AS due
+  FROM cards c JOIN topics t ON t.id = c.topic_id
+  GROUP BY t.id`, nowIso || new Date().toISOString());
+
+// ---------- pomodoro log ----------
+const logPomodoro = (p) =>
+  run('INSERT INTO pomodoro_log (date, completed_at, material_id, work_min) VALUES (?,?,?,?)',
+    p.date || new Date().toISOString().slice(0, 10), new Date().toISOString(),
+    p.material_id || null, p.work_min).lastInsertRowid;
+
+// Today's count + streak of consecutive days (ending today or yesterday) with ≥1 pomodoro.
+function pomodoroStats(today) {
+  const date = today || new Date().toISOString().slice(0, 10);
+  const count = get('SELECT COUNT(*) AS n FROM pomodoro_log WHERE date=?', date)?.n ?? 0;
+  const days = all('SELECT DISTINCT date FROM pomodoro_log ORDER BY date DESC').map(r => r.date);
+  let streak = 0;
+  let cursor = new Date(date + 'T00:00:00Z');
+  if (!days.includes(date)) cursor.setUTCDate(cursor.getUTCDate() - 1); // today not broken yet
+  for (const d of days.filter(d => d <= cursor.toISOString().slice(0, 10))) {
+    if (d !== cursor.toISOString().slice(0, 10)) break;
+    streak++;
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+  }
+  return { date, count, streak };
+}
+
 // ---------- settings ----------
 const getSetting = (key) => get('SELECT value FROM settings WHERE key=?', key)?.value ?? null;
 const setSetting = (key, value) =>
@@ -639,10 +760,13 @@ module.exports = {
   listStudyToday, listResumeItems,
   listEdges, createEdge, deleteEdge,
   listDeadlines, createDeadline, updateDeadline, deleteDeadline,
-  listBlocks, clearPlannedBlocks, createBlock, getBlock, duplicateBlock, deleteBlock, setBlockStatus, reorderBlocks,
+  listBlocks, clearPlannedBlocks, createBlock, getBlock, updateBlock, duplicateBlock, deleteBlock, setBlockStatus, reorderBlocks,
   listProblems, createProblem, updateProblem, deleteProblem, createMaterialSession,
   applyIngest, listModuleNotes,
   listReadingNotes, listReadingNoteLinks, createReadingNote, updateReadingNote, deleteReadingNote,
   linkReadingNotes, unlinkReadingNotes, getReadingNoteGraph,
+  listCards, listDueCards, createCard, updateCard, deleteCard, reviewCard, cardCounts,
+  logPomodoro, pomodoroStats,
+  logAiFeedback, listAiFeedback,
   getSetting, setSetting,
 };

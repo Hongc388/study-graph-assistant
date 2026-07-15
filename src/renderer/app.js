@@ -24,7 +24,7 @@ function fmtClock(iso) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-const MATERIAL_TYPES = ['lecture', 'assignment', 'exam-prep', 'paper', 'lab', 'cheatsheet', 'notes'];
+const MATERIAL_TYPES = ['lecture', 'assignment', 'exam-prep', 'paper', 'lab', 'cheatsheet', 'notes', 'overview'];
 const SECTION_SLOTS = [
   ['lecture', 'Lecture notes'],
   ['problemset', 'Problem set'],
@@ -39,7 +39,8 @@ function slotLabel(type) {
 
 function materialSlot(m) {
   if (['assignment', 'exam-prep', 'paper'].includes(m.type)) return 'problemset';
-  if (['cheatsheet', 'notes'].includes(m.type)) return 'reference';
+  // overview = "about this module" files: reference material, never study content
+  if (['cheatsheet', 'notes', 'overview'].includes(m.type)) return 'reference';
   if (SECTION_SLOTS.some(([k]) => k === m.type)) return m.type;
   return 'other';
 }
@@ -76,6 +77,8 @@ function matChipHtml(m) {
       <div class="mat-card-title">${esc(m.title)}</div>
       <div class="mat-card-meta muted">
         ${hint ? `<span>${esc(hint)}</span>` : '<span>Double-click to open</span>'}
+        ${m.note_count ? `<button class="mat-notes" data-id="${m.id}" data-title="${esc(m.title)}"
+          title="Review this file's notes graph">✎ ${m.note_count}</button>` : ''}
       </div>
     </div>
   </div>`;
@@ -91,6 +94,10 @@ function bindSectionBoard() {
     card.addEventListener('dblclick', () =>
       openMaterial(Number(card.dataset.id), card.dataset.title, card.dataset.path));
   });
+  view.querySelectorAll('.mat-notes').forEach(b => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    notesDialog(Number(b.dataset.id), b.dataset.title);
+  }));
   view.querySelectorAll('.slot-drop, .inbox-drop').forEach(zone => {
     zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('over'); });
     zone.addEventListener('dragleave', (e) => {
@@ -121,6 +128,7 @@ const routes = {
   module: renderModule,       // #/module/<id>
   graph: renderGraph_,
   queue: renderQueue,
+  cards: renderCards,         // spaced-repetition flashcards
   schedule: renderSchedule,   // #/schedule/today | timeline | calendar | list
   today: renderSchedule,      // alias → today tab
   deadlines: renderSchedule,  // alias → list tab (or timeline from settings)
@@ -290,6 +298,7 @@ async function startTimer(materialId, title, mode = 'none') {
   if (!materialId) return;
   await stopTimer(true);
   previewFocused = false;
+  pomoLastElapsed = 0; // new timer counts from zero — resync the pomodoro feed
   timer = {
     materialId,
     title,
@@ -332,6 +341,83 @@ document.addEventListener('visibilitychange', () => {
 api.onMaterialSessionEnd(() => stopTimer());
 api.onPreviewFocus(() => { previewFocused = true; syncTimerActivity(); });
 api.onPreviewBlur(() => { previewFocused = false; syncTimerActivity(); });
+
+// ---------- pomodoro coach ----------
+// Rides on the material timer: only ACTIVE study time advances the work phase,
+// breaks run on the wall clock. Completed pomodoros are logged for count/streak.
+let pomo = null;            // Pomodoro state (null = disabled in settings)
+let pomoLastElapsed = 0;    // last timerElapsedMs() seen, to feed active-time deltas
+let pomoTick = null;
+let pomoStats = { count: 0, streak: 0 };
+
+async function initPomodoro() {
+  if (pomoTick) { clearInterval(pomoTick); pomoTick = null; }
+  pomo = null;
+  if ((await api.settingsGet('pomodoro_enabled')) === '1') {
+    const cfg = JSON.parse(await api.settingsGet('pomodoro_cfg') || '{}');
+    pomo = Pomodoro.createPomodoro(cfg);
+    pomoLastElapsed = timer ? timerElapsedMs() : 0;
+    pomoStats = await api.pomoStats();
+    pomoTick = setInterval(pomodoroHeartbeat, 1000);
+  }
+  renderPomodoroDisplay();
+}
+
+function notifyUser(title, body) {
+  try {
+    if (Notification.permission !== 'denied') new Notification(title, { body });
+  } catch { /* notifications unavailable — the toast below still shows */ }
+  toastStatus(title);
+}
+
+async function pomodoroHeartbeat() {
+  if (!pomo) return;
+  if (timer) {
+    const el = timerElapsedMs();
+    const delta = el - pomoLastElapsed;
+    pomoLastElapsed = el;
+    if (delta > 0) {
+      const r = Pomodoro.applyWork(pomo, delta);
+      pomo = r.pomo;
+      if (r.events.includes('work-complete')) {
+        await api.pomoLog({ material_id: timer?.materialId || null, work_min: pomo.cfg.workMin });
+        pomoStats = await api.pomoStats();
+        const long = pomo.phase === 'long_break';
+        notifyUser(
+          `Pomodoro ${pomoStats.count} done 🍅`,
+          long ? `Take a long ${pomo.cfg.longBreakMin}-minute break — you earned it.`
+               : `Take a ${pomo.cfg.shortBreakMin}-minute break, then come back.`);
+      }
+    }
+  }
+  const t = Pomodoro.tick(pomo);
+  pomo = t.pomo;
+  if (t.events.includes('break-complete')) {
+    notifyUser('Break over', 'Back to focused work — open your next material.');
+  }
+  renderPomodoroDisplay();
+}
+
+function renderPomodoroDisplay() {
+  const el = document.getElementById('st-pomo');
+  if (!pomo) { el.hidden = true; return; }
+  el.hidden = false;
+  const ms = Pomodoro.phaseRemainingMs(pomo);
+  const mm = Math.floor(ms / 60000);
+  const ss = String(Math.floor((ms % 60000) / 1000)).padStart(2, '0');
+  const streak = pomoStats.streak > 1 ? ` · streak ${pomoStats.streak}d` : '';
+  if (pomo.phase === 'work') {
+    const counting = timer && !timer.paused;
+    el.innerHTML = `🍅 ${mm}:${ss} to break${counting ? '' : ' <span class="muted">(waiting for focus)</span>'} · ${pomoStats.count} today${streak}`;
+  } else {
+    el.innerHTML = `☕ break ${mm}:${ss} <a href="#" id="st-pomo-skip">skip</a> · ${pomoStats.count} today${streak}`;
+    el.querySelector('#st-pomo-skip').onclick = (e) => {
+      e.preventDefault();
+      pomo = Pomodoro.skipBreak(pomo);
+      renderPomodoroDisplay();
+    };
+  }
+}
 
 // ---------- status bar ----------
 async function refreshStatus() {
@@ -509,6 +595,106 @@ function formDialog(title, fields, submitLabel = 'Save') {
   });
 }
 
+// ---------- reading notes dialog (review the concept graph without reopening the file) ----------
+async function notesDialog(materialId, title) {
+  let graph = await api.notesListReading(materialId);
+  let selected = [];
+  const dlg = document.createElement('dialog');
+  dlg.className = 'notes-dialog';
+  dlg.innerHTML = `<h3 style="margin-bottom:2px">Notes — ${esc(title)}</h3>
+    <p class="muted" id="nd-hint" style="margin:0 0 8px">Click two notes to link them. New notes go to this file's graph.</p>
+    <div class="nd-body">
+      <svg id="nd-graph"></svg>
+      <div id="nd-list" class="nd-list"></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <input id="nd-input" placeholder="Add a concept…" style="flex:1">
+      <button class="primary small" id="nd-add">Add</button>
+      <button class="small" id="nd-ai" title="Local AI proposes links between your concepts — you accept or reject each">✨ Suggest links</button>
+      <button class="small" id="nd-close" style="margin-left:auto">Close</button>
+    </div>`;
+  document.body.appendChild(dlg);
+
+  const redraw = () => {
+    const svg = dlg.querySelector('#nd-graph');
+    if (window.renderNotesGraph) {
+      window.renderNotesGraph(svg, graph.notes, graph.links, {
+        selectedIds: selected,
+        onNodeClick: (n) => toggle(n.id),
+      });
+    }
+    dlg.querySelector('#nd-list').innerHTML = graph.notes.map(n => `
+      <div class="nd-item ${selected.includes(n.id) ? 'selected' : ''}" data-id="${n.id}">
+        <b>${esc(n.label)}</b>
+        <button class="danger-ghost small nd-del" data-id="${n.id}">✕</button>
+        <div class="muted" style="font-size:11px">${n.page ? `p.${n.page} · ` : ''}${esc((n.created_at || '').slice(0, 10))}</div>
+        ${n.body ? `<div class="muted" style="font-size:12px">${esc(n.body)}</div>` : ''}
+      </div>`).join('')
+      || '<p class="muted" style="padding:6px">No notes for this file yet — open it and capture concepts while reading, or add one below.</p>';
+    dlg.querySelectorAll('.nd-item').forEach(el => el.addEventListener('click', (e) => {
+      if (e.target.classList.contains('nd-del')) return;
+      toggle(Number(el.dataset.id));
+    }));
+    dlg.querySelectorAll('.nd-del').forEach(b => b.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      graph = await api.notesDeleteReading({ id: Number(b.dataset.id), materialId });
+      selected = [];
+      redraw();
+    }));
+    dlg.querySelector('#nd-hint').textContent = selected.length === 1
+      ? 'Now click a second note to link it.'
+      : 'Click two notes to link them. New notes go to this file\'s graph.';
+  };
+  const toggle = async (id) => {
+    if (selected.includes(id)) selected = selected.filter(x => x !== id);
+    else if (selected.length === 1) {
+      graph = await api.notesLinkReading({ fromId: selected[0], toId: id, materialId });
+      selected = [];
+    } else selected = [id];
+    redraw();
+  };
+  const add = async () => {
+    const label = dlg.querySelector('#nd-input').value.trim();
+    if (!label) return;
+    graph = await api.notesCreateReading({ material_id: materialId, label });
+    dlg.querySelector('#nd-input').value = '';
+    selected = [];
+    redraw();
+  };
+  dlg.querySelector('#nd-add').addEventListener('click', add);
+  dlg.querySelector('#nd-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); add(); }
+  });
+  dlg.querySelector('#nd-ai').addEventListener('click', async () => {
+    const hint = dlg.querySelector('#nd-hint');
+    hint.textContent = 'Asking local model for link suggestions…';
+    const r = await api.aiSuggestNoteLinks(materialId);
+    if (!r.ok) { hint.textContent = r.error; return; }
+    hint.textContent = '';
+    if (!r.links.length) { hint.textContent = 'No new links suggested.'; return; }
+    const byId = new Map(graph.notes.map(n => [n.id, n.label]));
+    const picked = await reviewDialog('AI link suggestions',
+      r.links.map(s => ({ label: `${byId.get(s.from)} ↔ ${byId.get(s.to)}`, detail: s.why || '' })),
+      'Link selected');
+    if (!picked) return;
+    const pickedSet = new Set(picked);
+    for (let i = 0; i < r.links.length; i++) {
+      const s = r.links[i];
+      const accepted = pickedSet.has(i);
+      api.aiFeedback({ kind: 'note-link', accepted,
+        payload: { a: byId.get(s.from), b: byId.get(s.to) } });
+      if (accepted) graph = await api.notesLinkReading({ fromId: s.from, toId: s.to, materialId });
+    }
+    selected = [];
+    redraw();
+  });
+  const finish = () => { dlg.close(); dlg.remove(); route(); };
+  dlg.querySelector('#nd-close').addEventListener('click', finish);
+  dlg.addEventListener('cancel', (e) => { e.preventDefault(); finish(); });
+  dlg.showModal();
+  redraw();
+}
+
 // ---------- Dashboard (study companion home) ----------
 async function renderDashboard() {
   currentModuleId = null;
@@ -564,8 +750,12 @@ async function renderDashboard() {
               ${r.problem_count ? ` · ${r.solved_count}/${r.problem_count} problems` : ''}
             </div>
           </div>
-          <button class="primary small resume-open" data-id="${r.id}" data-title="${esc(r.title)}"
-            data-path="${esc(r.path || '')}">Continue</button>
+          <div style="display:flex; flex-direction:column; gap:4px; align-items:flex-end">
+            <button class="primary small resume-open" data-id="${r.id}" data-title="${esc(r.title)}"
+              data-path="${esc(r.path || '')}">Continue</button>
+            ${r.note_count ? `<button class="small resume-notes" data-id="${r.id}"
+              data-title="${esc(r.title)}">✎ ${r.note_count} note${r.note_count > 1 ? 's' : ''}</button>` : ''}
+          </div>
         </div>
       </div>`).join('')}
     </div>` : `<p class="muted">Open a material from any module — it will show up here so you can pick up after a break.</p>`}
@@ -618,6 +808,8 @@ async function renderDashboard() {
 
   view.querySelectorAll('.resume-open, .log-open').forEach(b =>
     b.addEventListener('click', () => openMaterial(Number(b.dataset.id), b.dataset.title, b.dataset.path)));
+  view.querySelectorAll('.resume-notes').forEach(b =>
+    b.addEventListener('click', () => notesDialog(Number(b.dataset.id), b.dataset.title)));
   if (!resume.length && !studyLog.length) {
     try {
       await api.studyTodayLog(date);
@@ -679,6 +871,7 @@ async function renderModule(idStr) {
     <div class="row" style="margin-bottom:10px">
       <button id="add-topic" class="primary small">+ Section</button>
       <button id="ai-topics" class="small">✨ Suggest sections (AI)</button>
+      <button id="ai-types" class="small" title="Reads each file's text and checks its type — catches 'about this module' files filed as lectures">✨ Check file types (AI)</button>
       <button id="import-files" class="small">+ Import files</button>
       <button id="add-link" class="small">+ Add link</button>
       <span id="ai-topics-msg" class="muted"></span>
@@ -714,10 +907,13 @@ async function renderModule(idStr) {
             <div>
               <b>${esc(t.name)}</b>
               ${t.summary ? `<div class="muted" style="font-size:12px; margin-top:2px">${esc(t.summary)}</div>` : ''}
-              <div style="margin-top:6px">
+              <div style="margin-top:6px" title="readiness = the higher of: problems ${((t.mastery_problems ?? 0) * 100).toFixed(0)}% (solved ÷ total, attempts 30%) and study time ${((t.mastery_exposure ?? 0) * 100).toFixed(0)}% (5h caps at 60%)">
                 <span class="mbar"><div style="width:${t.mastery * 100}%"></div></span>
                 <span class="muted"> ${(t.mastery * 100).toFixed(0)}% readiness</span>
+                ${t.mastery > 0 ? `<span class="muted" style="font-size:11px">· from ${
+                  (t.mastery_problems ?? 0) >= (t.mastery_exposure ?? 0) ? 'problems' : 'study time'}</span>` : ''}
                 ${t.problem_count ? `<span class="chip">${t.solved_count}/${t.problem_count} solved</span>` : ''}
+                ${t.exposure_min ? `<span class="chip mono">${(t.exposure_min / 60).toFixed(1)}h</span>` : ''}
               </div>
             </div>
             <div class="row" style="flex-wrap:nowrap">
@@ -793,8 +989,8 @@ async function renderModule(idStr) {
     dlg.style.minWidth = '560px';
     const STATUSES = ['todo', 'attempted', 'solved', 'reviewed'];
     dlg.innerHTML = `<h3>Problems — ${esc(topic.name)}</h3>
-      <p class="muted">Readiness = solved ÷ total (attempts count 30%). Tag problems from past papers,
-        problem sheets and notebooks.</p>
+      <p class="muted">Readiness = the higher of problem competence (solved ÷ total, attempts count 30%)
+        and study time (5h caps at 60%). Tag problems from past papers, problem sheets and notebooks.</p>
       <div id="prob-list" style="max-height:300px; overflow-y:auto; margin-top:8px">
         ${probs.map(p => `<div class="row" style="border-bottom:1px solid var(--line); padding:5px 0" data-pid="${p.id}">
           <span style="flex:1">${esc(p.label)}
@@ -877,6 +1073,44 @@ async function renderModule(idStr) {
     if (picked.length) route();
   });
 
+  view.querySelector('#ai-types').addEventListener('click', async () => {
+    const msg = view.querySelector('#ai-topics-msg');
+    msg.textContent = 'Reading files and asking the local model…';
+    const offProgress = api.onAiClassifyProgress(({ done, total }) => {
+      msg.textContent = `Reading files and asking the local model… ${done}/${total}`;
+    });
+    const r = await api.aiClassifyModule(id);
+    offProgress();
+    if (!r.ok) { msg.textContent = r.error; return; }
+    msg.textContent = '';
+    const changes = r.items.filter(it => it.to !== it.from && it.textStatus !== 'error');
+    const failed = r.items.filter(it => it.textStatus === 'error').length;
+    if (!changes.length) {
+      msg.textContent = `All file types look right (${r.items.length} checked${failed ? `, ${failed} unreadable` : ''}).`;
+      return;
+    }
+    const picked = await reviewDialog(`AI type check — ${mod.code}`,
+      changes.map(it => ({
+        label: `${it.title}: ${it.from} → ${it.to}`,
+        detail: `${it.reason}${it.textStatus !== 'text' ? ` · ⚠ filename only (${it.textStatus})` : ''}`
+          + ` · confidence ${Math.round((it.confidence || 0) * 100)}%`,
+      })), 'Apply selected');
+    if (!picked) return;
+    const pickedSet = new Set(picked);
+    for (let i = 0; i < changes.length; i++) {
+      const it = changes[i];
+      const accepted = pickedSet.has(i);
+      // log the decision — future prompts imitate it, and it's fine-tune data
+      api.aiFeedback({ kind: 'material-type', accepted,
+        payload: { title: it.title, from: it.from, to: it.to } });
+      if (accepted) {
+        const mat = materials.find(m => m.id === it.id);
+        if (mat) await api.materialsUpdate({ ...mat, type: it.to });
+      }
+    }
+    if (picked.length) route();
+  });
+
   const matFields = (m = {}) => [
     { name: 'title', label: 'Title', value: m.title },
     { name: 'type', label: 'Slot', type: 'select', value: materialSlot(m) || 'lecture',
@@ -946,6 +1180,121 @@ async function renderQueue() {
   }));
   view.querySelectorAll('.q-mod').forEach(b =>
     b.addEventListener('click', () => { location.hash = `#/module/${b.dataset.mid}`; }));
+}
+
+// ---------- Flashcards (SM-2 spaced repetition) ----------
+let cardsTopicFilter = 0; // 0 = all topics in the browser table
+async function renderCards() {
+  const [due, topics, mods, allCards] = await Promise.all([
+    api.cardsDue(50), api.topicsList(), api.modulesList(),
+    api.cardsList(cardsTopicFilter || undefined)]);
+  const modColor = new Map(mods.map(m => [m.id, m.color]));
+  const cur = due[0];
+
+  const fmtDue = (iso) => {
+    const d = Math.round((new Date(iso) - Date.now()) / 86400000);
+    return d <= 0 ? '<span style="color:var(--danger)">due</span>' : `${d}d`;
+  };
+
+  view.innerHTML = `
+    <div class="row" style="justify-content:space-between">
+      <h2>Flashcards</h2>
+      <span class="muted">${due.length} due · ${allCards.length} card${allCards.length === 1 ? '' : 's'}${cardsTopicFilter ? ' in topic' : ''}</span>
+    </div>
+    <div class="panel card-review">
+      ${cur ? `
+        <p class="muted" style="margin-top:0">
+          <span class="dot" style="background:${esc(modColor.get(cur.module_id) || '#888')}"></span>
+          ${esc(cur.module_code)} · ${esc(cur.topic_name)}
+          · ${cur.reps === 0 ? 'new card' : `seen ${cur.reps}×`}</p>
+        <div class="card-face" id="card-front">${esc(cur.front)}</div>
+        <div class="card-face card-back" id="card-back" hidden>${esc(cur.back)}</div>
+        <div class="row" id="card-actions" style="margin-top:12px">
+          <button class="primary" id="card-reveal">Show answer</button>
+        </div>
+        <div class="row card-ratings" id="card-ratings" hidden style="margin-top:12px">
+          ${[['Again', 0, 'var(--danger)'], ['Hard', 1, 'var(--warn, #b58900)'],
+             ['Good', 2, 'var(--ok)'], ['Easy', 3, 'var(--accent, var(--ok))']].map(([label, r, color]) => `
+            <button class="rate" data-rating="${r}" style="border-color:${color}">
+              ${label} <span class="muted">${Srs.previewInterval(cur, r)}</span></button>`).join('')}
+        </div>`
+      : `<p class="muted" style="margin:0">🎉 No cards due. ${allCards.length
+          ? 'Come back when the next review is scheduled.'
+          : 'Add your first card below — front is the question, back is the answer.'}</p>`}
+    </div>
+
+    <div class="panel">
+      <h3 style="margin-top:0">Add a card</h3>
+      <div class="row">
+        <div class="field"><label>Topic</label>
+          <select id="nc-topic">${topics.map(t =>
+            `<option value="${t.id}">${esc(mods.find(m => m.id === t.module_id)?.code || '')} — ${esc(t.name)}</option>`).join('')}</select></div>
+        <div class="field" style="flex:1"><label>Front (question)</label>
+          <input id="nc-front" placeholder="What does SVD factor a matrix into?"></div>
+        <div class="field" style="flex:1"><label>Back (answer)</label>
+          <input id="nc-back" placeholder="U Σ Vᵀ"></div>
+        <button class="primary" id="nc-add" style="align-self:flex-end">Add</button>
+      </div>
+    </div>
+
+    <div class="row" style="justify-content:space-between; margin-top:6px">
+      <h3 style="margin:0">Browse</h3>
+      <select id="cards-filter">
+        <option value="0">All topics</option>
+        ${topics.map(t => `<option value="${t.id}" ${t.id === cardsTopicFilter ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}
+      </select>
+    </div>
+    <table><thead><tr><th>Front</th><th>Back</th><th>Topic</th><th>Due</th><th>Reps</th><th></th></tr></thead>
+    <tbody>
+      ${allCards.map(c => `<tr class="${c.suspended ? 'muted' : ''}">
+        <td>${esc(c.front.slice(0, 60))}</td>
+        <td class="muted">${esc(c.back.slice(0, 40))}</td>
+        <td><span class="dot" style="background:${esc(c.module_color)}"></span>${esc(c.topic_name)}</td>
+        <td class="mono">${c.suspended ? 'paused' : fmtDue(c.due_at)}</td>
+        <td class="mono">${c.reps}${c.lapses ? ` <span style="color:var(--danger)">(${c.lapses}✗)</span>` : ''}</td>
+        <td style="text-align:right; white-space:nowrap">
+          <button class="small c-sus" data-id="${c.id}">${c.suspended ? 'Resume' : 'Pause'}</button>
+          <button class="small c-del" data-id="${c.id}">✕</button>
+        </td>
+      </tr>`).join('') || '<tr><td colspan="6" class="muted">No cards yet.</td></tr>'}
+    </tbody></table>`;
+
+  // review flow: reveal → rate → re-render pulls the next due card
+  view.querySelector('#card-reveal')?.addEventListener('click', () => {
+    view.querySelector('#card-back').hidden = false;
+    view.querySelector('#card-actions').hidden = true;
+    view.querySelector('#card-ratings').hidden = false;
+  });
+  view.querySelectorAll('.rate').forEach(b => b.addEventListener('click', async () => {
+    await api.cardsReview({ id: cur.id, rating: Number(b.dataset.rating) });
+    route();
+  }));
+
+  view.querySelector('#nc-add').addEventListener('click', async () => {
+    const front = view.querySelector('#nc-front').value.trim();
+    if (!front) return alert('The front (question) cannot be empty');
+    await api.cardsCreate({
+      topic_id: Number(view.querySelector('#nc-topic').value),
+      front,
+      back: view.querySelector('#nc-back').value.trim(),
+    });
+    toastStatus('card added — due now');
+    route();
+  });
+
+  view.querySelector('#cards-filter').addEventListener('change', (e) => {
+    cardsTopicFilter = Number(e.target.value);
+    route();
+  });
+  view.querySelectorAll('.c-del').forEach(b => b.addEventListener('click', async () => {
+    await api.cardsDelete(Number(b.dataset.id));
+    route();
+  }));
+  view.querySelectorAll('.c-sus').forEach(b => b.addEventListener('click', async () => {
+    const c = allCards.find(x => x.id === Number(b.dataset.id));
+    await api.cardsUpdate({ ...c, suspended: c.suspended ? 0 : 1 });
+    route();
+  }));
 }
 
 // ---------- Graph ----------
@@ -1135,7 +1484,8 @@ function blockCardHtml(b) {
   const dur = b.end_min - b.start_min;
   const actions = b.status === 'planned'
     ? `<button class="small mark" data-id="${b.id}" data-s="done">Done</button>
-       <button class="small mark" data-id="${b.id}" data-s="skipped">Skip</button>`
+       <button class="small mark" data-id="${b.id}" data-s="skipped">Skip</button>
+       <button class="small edit-block" data-id="${b.id}">Edit</button>`
     : b.status === 'done'
       ? `<button class="small reopen-block" data-id="${b.id}">Reopen</button>
          <button class="small dup-block" data-id="${b.id}">+ Again</button>`
@@ -1246,6 +1596,7 @@ function planRowHtml(b) {
   const actions = b.status === 'planned'
     ? `<button class="small mark" data-id="${b.id}" data-s="done">Done</button>
        <button class="small mark" data-id="${b.id}" data-s="skipped">Skip</button>
+       <button class="small edit-block" data-id="${b.id}">Edit</button>
        <button class="danger-ghost small del-block" data-id="${b.id}" data-logged="0">✕</button>`
     : `<button class="small reopen-block" data-id="${b.id}">Reopen</button>
        <button class="small dup-block" data-id="${b.id}">+ Again</button>
@@ -1286,30 +1637,51 @@ function deadlineRowHtml(d, topics, { showCountdown = true } = {}) {
   </tr>`;
 }
 
-async function promptStudyBlock(date, topics, mods, materials) {
-  if (!topics.length) return alert('Add topics in a module first.');
+function blockFormFields(topics, mods, materials, b = {}) {
   const modCode = (id) => mods.find(m => m.id === id)?.code || '?';
   const topicOptions = [...topics]
-    .sort((a, b) => modCode(a.module_id).localeCompare(modCode(b.module_id)) || a.name.localeCompare(b.name))
+    .sort((a, b2) => modCode(a.module_id).localeCompare(modCode(b2.module_id)) || a.name.localeCompare(b2.name))
     .map(t => ({ value: t.id, label: `${modCode(t.module_id)} — ${t.name}` }));
   const matOptions = [{ value: '', label: '(none)' },
     ...materials.map(m => ({
       value: m.id,
       label: `${modCode(m.module_id)} · ${m.title}`,
     }))];
-  const d = await formDialog('Add study block', [
-    { name: 'start', label: 'Start', type: 'time', value: '18:00' },
-    { name: 'end', label: 'End', type: 'time', value: '19:30' },
-    { name: 'topic_id', label: 'Topic', type: 'select', options: topicOptions },
-    { name: 'material_id', label: 'Material (optional)', type: 'select', options: matOptions },
-    { name: 'reason', label: 'Note (optional)' },
-  ], 'Add');
+  return [
+    { name: 'start', label: 'Start', type: 'time', value: b.start_min != null ? fmtMin(b.start_min) : '18:00' },
+    { name: 'end', label: 'End', type: 'time', value: b.end_min != null ? fmtMin(b.end_min) : '19:30' },
+    { name: 'topic_id', label: 'Topic', type: 'select', options: topicOptions, value: b.topic_id },
+    { name: 'material_id', label: 'Material (optional)', type: 'select', options: matOptions, value: b.material_id ?? '' },
+    { name: 'reason', label: 'Note (optional)', value: b.reason },
+  ];
+}
+
+async function promptStudyBlock(date, topics, mods, materials) {
+  if (!topics.length) return alert('Add topics in a module first.');
+  const d = await formDialog('Add study block', blockFormFields(topics, mods, materials), 'Add');
   if (!d) return;
   const start_min = toMin(d.start);
   const end_min = toMin(d.end);
   if (!d.start || !d.end || end_min <= start_min) return alert('End must be after start.');
   await api.blocksCreate({
     date,
+    start_min,
+    end_min,
+    topic_id: Number(d.topic_id),
+    material_id: d.material_id ? Number(d.material_id) : null,
+    reason: d.reason.trim(),
+  });
+  route();
+}
+
+async function editStudyBlock(b, topics, mods, materials) {
+  const d = await formDialog('Edit study block', blockFormFields(topics, mods, materials, b), 'Save');
+  if (!d) return;
+  const start_min = toMin(d.start);
+  const end_min = toMin(d.end);
+  if (!d.start || !d.end || end_min <= start_min) return alert('End must be after start.');
+  await api.blocksUpdate({
+    id: b.id,
     start_min,
     end_min,
     topic_id: Number(d.topic_id),
@@ -1526,6 +1898,10 @@ async function renderSchedule() {
       await api.blocksSetStatus(Number(b.dataset.id), b.dataset.s);
       route();
     }));
+    body.querySelectorAll('.edit-block').forEach(b => b.addEventListener('click', () => {
+      const block = blocks.find(x => x.id === Number(b.dataset.id));
+      if (block) editStudyBlock(block, topics, mods, materials);
+    }));
     body.querySelectorAll('.reopen-block').forEach(b => b.addEventListener('click', async () => {
       await api.blocksSetStatus(Number(b.dataset.id), 'planned');
       route();
@@ -1576,8 +1952,10 @@ async function renderSchedule() {
 
 // ---------- Settings ----------
 async function renderSettings() {
-  const [model, aiStat, root] = await Promise.all([
-    api.settingsGet('ollama_model'), api.aiStatus(), api.ingestDefaultRoot()]);
+  const [model, aiStat, root, pomoEnabled, pomoCfgRaw] = await Promise.all([
+    api.settingsGet('ollama_model'), api.aiStatus(), api.ingestDefaultRoot(),
+    api.settingsGet('pomodoro_enabled'), api.settingsGet('pomodoro_cfg')]);
+  const pomoCfg = { ...Pomodoro.DEFAULTS, ...JSON.parse(pomoCfgRaw || '{}') };
   view.innerHTML = `
     <h2>Settings</h2>
     <div class="panel">
@@ -1594,13 +1972,43 @@ async function renderSettings() {
         (127.0.0.1:11434) and are skipped when it isn't running.</p>
       <p style="margin:8px 0">Status: ${aiStat.ok
         ? `<b style="color:var(--ok)">connected</b> · models: ${aiStat.models.map(esc).join(', ') || 'none pulled'}`
-        : `<b style="color:var(--danger)">offline</b> — install from ollama.com, then \`ollama pull llama3.2\``}</p>
+        : `<b style="color:var(--danger)">offline</b> — install from ollama.com, then \`ollama pull qwen2.5\``}</p>
       <div class="row">
         <div class="field"><label>Model name (blank = auto-use first available)</label>
           <input id="model" value="${esc(model || '')}" placeholder="auto" style="width:220px"></div>
         <button id="save-model" class="primary" style="align-self:flex-end">Save</button>
       </div>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0">Pomodoro coach</h3>
+      <p class="muted">Counts only focused study time (the file timer must be running). After each work
+        interval you get a break reminder; every ${pomoCfg.cyclesPerLong}th break is the long one.</p>
+      <label style="display:flex; align-items:center; gap:6px; margin:8px 0; cursor:pointer">
+        <input type="checkbox" id="pomo-on" ${pomoEnabled === '1' ? 'checked' : ''}> Enable pomodoro coach</label>
+      <div class="row">
+        <div class="field"><label>Work (min)</label>
+          <input id="pomo-work" type="number" min="5" max="120" value="${pomoCfg.workMin}" style="width:80px"></div>
+        <div class="field"><label>Short break</label>
+          <input id="pomo-short" type="number" min="1" max="30" value="${pomoCfg.shortBreakMin}" style="width:80px"></div>
+        <div class="field"><label>Long break</label>
+          <input id="pomo-long" type="number" min="5" max="60" value="${pomoCfg.longBreakMin}" style="width:80px"></div>
+        <div class="field"><label>Cycles per long</label>
+          <input id="pomo-cycles" type="number" min="2" max="8" value="${pomoCfg.cyclesPerLong}" style="width:80px"></div>
+        <button id="save-pomo" class="primary" style="align-self:flex-end">Save</button>
+      </div>
     </div>`;
+  view.querySelector('#save-pomo').addEventListener('click', async () => {
+    const num = (id, fallback) => Number(view.querySelector(id).value) || fallback;
+    await api.settingsSet('pomodoro_enabled', view.querySelector('#pomo-on').checked ? '1' : '0');
+    await api.settingsSet('pomodoro_cfg', JSON.stringify({
+      workMin: num('#pomo-work', 25),
+      shortBreakMin: num('#pomo-short', 5),
+      longBreakMin: num('#pomo-long', 15),
+      cyclesPerLong: num('#pomo-cycles', 4),
+    }));
+    await initPomodoro();
+    toastStatus('pomodoro settings saved');
+  });
   view.querySelector('#save-model').addEventListener('click', async () => {
     await api.settingsSet('ollama_model', view.querySelector('#model').value.trim());
     route();
@@ -1620,6 +2028,7 @@ async function renderSettings() {
     badge.classList.toggle('on', s.ok);
   });
   if (!location.hash) location.hash = '#/dashboard';
+  initPomodoro();
   route();
   setInterval(refreshStatus, 60000); // keep "next block" in the status bar fresh
 })();

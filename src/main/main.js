@@ -6,6 +6,7 @@ const { pathToFileURL } = require('url');
 const db = require('./db');
 const { planDay } = require('./scheduler');
 const ai = require('./ai');
+const extract = require('./extract');
 const ingest = require('./ingest');
 const organize = require('./organize');
 const { isPreviewable } = require('./preview');
@@ -148,9 +149,29 @@ app.whenReady().then(() => {
   registerIpc();
   createWindow();
   // CI smoke mode: boot everything (DB open, migrations, IPC, window load),
-  // then exit 0. Any main-process throw exits non-zero and fails the job.
+  // then walk every view so renderer errors fail the job too, then exit 0.
   if (process.argv.includes('--smoke')) {
-    setTimeout(() => { console.log('SMOKE_OK'); app.exit(0); }, 3000);
+    const rendererErrors = [];
+    mainWin.webContents.on('console-message', (event, level, message) => {
+      const lvl = typeof event === 'object' && 'level' in event ? event.level : level;
+      if (lvl === 3 || lvl === 'error') rendererErrors.push(event.message ?? message);
+    });
+    const views = ['#/dashboard', '#/graph', '#/queue', '#/cards', '#/schedule/today',
+                   '#/schedule/timeline', '#/settings'];
+    let i = 0;
+    const step = () => {
+      if (i < views.length) {
+        mainWin.webContents.executeJavaScript(`location.hash='${views[i++]}'`).catch(() => {});
+        setTimeout(step, 400);
+      } else if (rendererErrors.length) {
+        console.error('SMOKE_RENDERER_ERRORS\n' + rendererErrors.join('\n'));
+        app.exit(1);
+      } else {
+        console.log('SMOKE_OK');
+        app.exit(0);
+      }
+    };
+    mainWin.webContents.once('did-finish-load', () => setTimeout(step, 600));
   }
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -164,7 +185,7 @@ app.on('window-all-closed', () => {
 // Pick the model to use: explicit setting first, else whatever Ollama has pulled.
 async function resolveModel() {
   const configured = db.getSetting('ollama_model');
-  const s = await ai.status();
+  const s = await ai.ensureRunning();
   if (!s.ok) throw new Error(s.error);
   if (!s.models.length) throw new Error('Ollama is running but has no models — run `ollama pull qwen2.5`');
   if (configured && s.models.includes(configured)) return configured;
@@ -247,6 +268,7 @@ function registerIpc() {
     // schedule
     'blocks:list': (_, date) => db.listBlocks(date),
     'blocks:create': (_, b) => { db.createBlock(b); return db.listBlocks(b.date); },
+    'blocks:update': (_, b) => db.updateBlock(b),
     'blocks:delete': (_, id) => db.deleteBlock(id),
     'blocks:duplicate': (_, id) => {
       const newId = db.duplicateBlock(id);
@@ -337,11 +359,22 @@ function registerIpc() {
     'study:todayLog': (_, date) => db.listStudyToday(date || new Date().toISOString().slice(0, 10)),
     'study:resume': (_, limit) => db.listResumeItems(Math.min(limit ?? 8, db.MAX_RECENT_ACCESS)),
     'study:recentAccessMax': () => db.MAX_RECENT_ACCESS,
+    // flashcards (SM-2 spaced repetition)
+    'cards:list': (_, topicId) => db.listCards(topicId),
+    'cards:due': (_, limit) => db.listDueCards(new Date().toISOString(), limit ?? 50),
+    'cards:create': (_, c) => db.createCard(c),
+    'cards:update': (_, c) => db.updateCard(c),
+    'cards:delete': (_, id) => db.deleteCard(id),
+    'cards:review': (_, { id, rating }) => db.reviewCard(id, rating),
+    'cards:counts': () => db.cardCounts(new Date().toISOString()),
+    // pomodoro log
+    'pomo:log': (_, p) => db.logPomodoro(p),
+    'pomo:stats': () => db.pomodoroStats(),
     // settings
     'settings:get': (_, key) => db.getSetting(key),
     'settings:set': (_, key, value) => db.setSetting(key, value),
     // AI (all optional; return {ok:false} rather than throwing to the UI)
-    'ai:status': () => ai.status(),
+    'ai:status': () => ai.ensureRunning(),
     'ai:suggestTopics': async (_, moduleId) => {
       try {
         const model = await resolveModel();
@@ -359,6 +392,53 @@ function registerIpc() {
         return { ok: true, edges: await ai.suggestEdges(model, topics) };
       } catch (e) { return { ok: false, error: e.message }; }
     },
+    // Read each file's actual text and classify it — the filename heuristic
+    // can't tell a "welcome to this module" PDF from a real lecture.
+    'ai:classifyModule': async (ev, moduleId) => {
+      try {
+        const model = await resolveModel();
+        const mod = db.listModules().find(m => m.id === moduleId);
+        const mats = db.listMaterials(moduleId).filter(m => m.path && !/^https?:/i.test(m.path));
+        if (!mats.length) return { ok: false, error: 'No local files in this module' };
+        const examples = db.listAiFeedback('material-type', 20)
+          .filter(f => f.accepted).map(f => f.payload).slice(0, 5);
+        const items = [];
+        let done = 0;
+        for (const m of mats) {
+          const { text, reason } = await extract.extractText(m.path);
+          try {
+            const j = await ai.classifyMaterial(model, {
+              title: m.title, moduleName: mod?.name || '', text,
+            }, examples);
+            items.push({ id: m.id, title: m.title, from: m.type, to: j.type,
+              confidence: text ? j.confidence : Math.min(j.confidence ?? 0, 0.4),
+              reason: j.reason, textStatus: text ? 'text' : reason });
+          } catch (e) {
+            items.push({ id: m.id, title: m.title, from: m.type, to: m.type,
+              confidence: 0, reason: `skipped: ${e.message}`, textStatus: 'error' });
+          }
+          done++;
+          ev.sender.send('ai:classify-progress', { done, total: mats.length });
+        }
+        return { ok: true, items };
+      } catch (e) { return { ok: false, error: e.message }; }
+    },
+    'ai:suggestNoteLinks': async (_, materialId) => {
+      try {
+        const model = await resolveModel();
+        const { notes, links } = db.getReadingNoteGraph(materialId);
+        if (notes.length < 3) return { ok: false, error: 'Need at least 3 notes to suggest links' };
+        const mat = db.getMaterial(materialId);
+        const examples = db.listAiFeedback('note-link', 16).map(f => ({ ...f.payload, accepted: f.accepted }));
+        const ids = new Set(notes.map(n => n.id));
+        const linked = new Set(links.map(l => `${Math.min(l.from_note, l.to_note)}-${Math.max(l.from_note, l.to_note)}`));
+        const raw = await ai.suggestNoteLinks(model, mat?.title || '', notes, examples);
+        const fresh = raw.filter(s => ids.has(s.from) && ids.has(s.to) && s.from !== s.to
+          && !linked.has(`${Math.min(s.from, s.to)}-${Math.max(s.from, s.to)}`));
+        return { ok: true, links: fresh };
+      } catch (e) { return { ok: false, error: e.message }; }
+    },
+    'ai:feedback': (_, f) => db.logAiFeedback(f),
   };
   for (const [channel, fn] of Object.entries(handlers)) ipcMain.handle(channel, fn);
   ipcMain.on('material:saveProgressSync', (_, payload) => {

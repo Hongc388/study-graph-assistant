@@ -428,3 +428,35 @@ dialog .row { margin-top: 11px; }
 .block-card-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
 .today-deadlines { margin-top: 20px; }
 .today-deadlines h3 { font-size: 13px; margin: 0 0 8px; }
+
+/* ---------- flashcards ---------- */
+.card-review { text-align: left; }
+.card-face {
+  font-size: 17px; font-weight: 600; line-height: 1.45;
+  padding: 14px 4px 4px; white-space: pre-wrap;
+}
+.card-back {
+  border-top: 1px dashed var(--border, #D4D1C7);
+  margin-top: 10px; color: var(--text-secondary); font-weight: 500;
+}
+.card-ratings .rate {
+  border-width: 1.5px; font-weight: 600; min-width: 92px;
+}
+.card-ratings .rate .muted { font-weight: 400; font-size: 11px; }
+
+/* ---------- reading-notes dialog + badges ---------- */
+.notes-dialog { min-width: 640px; max-width: 80vw; }
+.nd-body { display: flex; gap: 10px; height: 320px; }
+#nd-graph { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--bg, #fff); }
+.nd-list { width: 220px; overflow-y: auto; }
+.nd-item { padding: 6px 8px; border-bottom: 1px solid var(--line); cursor: pointer; position: relative; }
+.nd-item.selected { outline: 2px solid var(--accent); border-radius: 4px; }
+.nd-item .nd-del { position: absolute; top: 4px; right: 4px; }
+.mat-notes {
+  border: none; background: none; padding: 0 2px; cursor: pointer;
+  color: var(--accent); font-size: 11px; font-weight: 600;
+}
+.mat-notes:hover { text-decoration: underline; }
+.resume-notes { white-space: nowrap; }
+.nedge { stroke: #C8C5BA; stroke-width: 1.2; }
+.nnode { cursor: pointer; }

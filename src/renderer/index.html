@@ -13,6 +13,7 @@
     <button class="act" data-view="graph" title="Topic Graph">◉</button>
     <button class="act" data-view="today" title="Today Plan" onclick="location.hash='#/schedule/today'">▸</button>
     <button class="act" data-view="queue" title="Problem Queue">▤</button>
+    <button class="act" data-view="cards" title="Flashcards">▧</button>
     <button class="act" data-view="deadlines" title="Deadlines" onclick="location.hash='#/schedule/timeline'">◷</button>
     <button class="act" data-view="settings" title="Settings" style="margin-top:auto">⚙</button>
   </div>
@@ -32,6 +33,7 @@
     <span id="st-next" class="st-item"></span>
     <span class="st-spacer"></span>
     <span id="st-timer" class="st-item" hidden></span>
+    <span id="st-pomo" class="st-item" hidden></span>
     <span id="st-ai" class="st-item">AI: checking…</span>
     <span class="st-item st-kbd">⌘K palette</span>
   </footer>
@@ -45,6 +47,8 @@
   </div>
 
   <script src="../shared/timer-state.js"></script>
+  <script src="../shared/pomodoro.js"></script>
+  <script src="../shared/srs.js"></script>
   <script src="graphview.js"></script>
   <script src="app.js"></script>
 </body>

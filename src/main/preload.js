@@ -14,9 +14,12 @@ const channels = [
   'problems:list', 'problems:create', 'problems:update', 'problems:delete', 'problems:queue', 'sessions:create',
   'edges:list', 'edges:create', 'edges:delete',
   'deadlines:list', 'deadlines:create', 'deadlines:update', 'deadlines:delete',
-  'blocks:list', 'blocks:create', 'blocks:delete', 'blocks:duplicate', 'blocks:setStatus', 'blocks:reorder', 'plan:generate',
+  'blocks:list', 'blocks:create', 'blocks:update', 'blocks:delete', 'blocks:duplicate', 'blocks:setStatus', 'blocks:reorder', 'plan:generate',
+  'cards:list', 'cards:due', 'cards:create', 'cards:update', 'cards:delete', 'cards:review', 'cards:counts',
+  'pomo:log', 'pomo:stats',
   'settings:get', 'settings:set',
   'ai:status', 'ai:suggestTopics', 'ai:suggestEdges',
+  'ai:classifyModule', 'ai:suggestNoteLinks', 'ai:feedback',
 ];
 
 const api = {};
@@ -34,5 +37,6 @@ function onChannel(channel, cb) {
 api.onMaterialSessionEnd = (cb) => onChannel('material:session-end', cb);
 api.onPreviewFocus = (cb) => onChannel('material:preview-focus', cb);
 api.onPreviewBlur = (cb) => onChannel('material:preview-blur', cb);
+api.onAiClassifyProgress = (cb) => onChannel('ai:classify-progress', cb);
 
 contextBridge.exposeInMainWorld('api', api);
