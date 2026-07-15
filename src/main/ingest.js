@@ -9,15 +9,15 @@ const path = require('path');
 // Colors: CVD-validated categorical palette for dark surfaces (fixed assignment,
 // never cycled); REF gets a neutral gray since it's a shared library, not a series.
 const KNOWN_MODULES = {
-  'computibility':      { code: 'COMP3001', name: 'Computability & Complexity', color: '#444441', work: 'proof' },
-  'machine_learning':   { code: 'COMP3009', name: 'Machine Learning',           color: '#085041', work: 'coding' },
-  'computer vision':    { code: 'COMP3007', name: 'Computer Vision',            color: '#3C3489', work: 'coding' },
-  'cryptography':       { code: 'COMP3077', name: 'Cryptography',               color: '#712B13', work: 'coding' },
-  'agent':              { code: 'COMP3004', name: 'Agents',                     color: '#72243E', work: 'writing' },
-  'computer security':  { code: 'COMP3006', name: 'Computer Security',          color: '#444441', work: 'coding' },
-  'ethics':             { code: 'COMP3020', name: 'Ethics',                     color: '#444441', work: 'writing' },
-  'dessertation':       { code: 'COMP3003', name: 'Dissertation',               color: '#72243E', work: 'writing' },
-  'referenceBook':      { code: 'REF',      name: 'Shared Reference Library',   color: '#444441', work: 'reading' },
+  'computibility':      { code: 'COMP3001', name: 'Computability & Complexity', color: '#55544F', work: 'proof' },
+  'machine_learning':   { code: 'COMP3009', name: 'Machine Learning',           color: '#0E7A63', work: 'coding' },
+  'computer vision':    { code: 'COMP3007', name: 'Computer Vision',            color: '#4C43AC', work: 'coding' },
+  'cryptography':       { code: 'COMP3077', name: 'Cryptography',               color: '#8E3A1C', work: 'coding' },
+  'agent':              { code: 'COMP3004', name: 'Agents',                     color: '#92304F', work: 'writing' },
+  'computer security':  { code: 'COMP3006', name: 'Computer Security',          color: '#55544F', work: 'coding' },
+  'ethics':             { code: 'COMP3020', name: 'Ethics',                     color: '#55544F', work: 'writing' },
+  'dessertation':       { code: 'COMP3003', name: 'Dissertation',               color: '#92304F', work: 'writing' },
+  'referenceBook':      { code: 'REF',      name: 'Shared Reference Library',   color: '#55544F', work: 'reading' },
 };
 
 // Defaults shipped before the validated palette — refreshed on re-ingest so

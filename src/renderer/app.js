@@ -46,10 +46,10 @@ function materialSlot(m) {
 }
 
 const SLOT_COLORS = {
-  lecture: '#085041',
-  problemset: '#3C3489',
-  reference: '#444441',
-  lab: '#712B13',
+  lecture: '#0E7A63',
+  problemset: '#4C43AC',
+  reference: '#55544F',
+  lab: '#8E3A1C',
   other: '#8A8983',
 };
 
@@ -57,12 +57,13 @@ const SLOT_COLORS = {
 function tagClassForModule(modOrCode, color) {
   const code = (typeof modOrCode === 'string' ? modOrCode : modOrCode?.code || '').toUpperCase();
   const c = (color || (typeof modOrCode === 'object' ? modOrCode?.color : '') || '').toLowerCase();
-  if (code.includes('3009') || c === '#085041') return 'tag-teal';
-  if (code.includes('3007') || c === '#3c3489') return 'tag-purple';
-  if (code.includes('3077') || c === '#712b13') return 'tag-coral';
-  if (code.includes('3003') || code.includes('3004') || c === '#72243e') return 'tag-pink';
-  if (c === '#791f1f') return 'tag-red';
-  if (c === '#27500a') return 'tag-green';
+  // both palette generations map to the same tag (restored backups keep old hexes)
+  if (code.includes('3009') || c === '#0e7a63' || c === '#085041') return 'tag-teal';
+  if (code.includes('3007') || c === '#4c43ac' || c === '#3c3489') return 'tag-purple';
+  if (code.includes('3077') || c === '#8e3a1c' || c === '#712b13') return 'tag-coral';
+  if (code.includes('3003') || code.includes('3004') || c === '#92304f' || c === '#72243e') return 'tag-pink';
+  if (c === '#942929' || c === '#791f1f') return 'tag-red';
+  if (c === '#33690e' || c === '#27500a') return 'tag-green';
   return 'tag-gray';
 }
 

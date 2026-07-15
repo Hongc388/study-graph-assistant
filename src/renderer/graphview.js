@@ -52,7 +52,7 @@
       id: 'arrow', viewBox: '0 0 10 10', refX: 20, refY: 5,
       markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse',
     });
-    marker.appendChild(el('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: '#085041' }));
+    marker.appendChild(el('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: '#0E7A63' }));
     defs.appendChild(marker);
     svg.appendChild(defs);
 
@@ -217,8 +217,8 @@
       const on = selected.has(n.note.id);
       n.circle = el('circle', {
         r: on ? 11 : 8,
-        fill: on ? '#085041' : '#F1EFE8',
-        stroke: on ? '#0F6E56' : '#E5E3DB',
+        fill: on ? '#0E7A63' : '#F5F3EC',
+        stroke: on ? '#12866A' : '#E8E6DE',
         'stroke-width': 1.5,
       });
       const label = el('text', { dy: 18, 'text-anchor': 'middle', fill: '#5C5B57', 'font-size': '9.5' });

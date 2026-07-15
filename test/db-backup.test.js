@@ -115,3 +115,18 @@ test('import refuses a file that is not a study-graph database', (t) => {
   assert.throws(() => db.importFrom(junk));
   assert.strictEqual(db.listModules()[0].code, 'IMPORTED', 'live data untouched');
 });
+
+test('reopening remaps old-palette module colors to the lighter hexes', (t) => {
+  if (skipDb) return t.skip('better-sqlite3 not built for this Node ABI');
+  const dirC = path.join(tmpDir, 'c');
+  fs.mkdirSync(dirC);
+  db.close();
+  db.open(dirC);
+  const oldPalette = db.createModule({ code: 'OLD1', name: 'x', color: '#085041' });
+  const custom = db.createModule({ code: 'CUST', name: 'y', color: '#123456' });
+  db.close();
+  db.open(dirC); // migrate() runs the remap
+  const byId = Object.fromEntries(db.listModules().map(m => [m.id, m.color]));
+  assert.strictEqual(byId[oldPalette], '#0E7A63'); // same hue, lighter
+  assert.strictEqual(byId[custom], '#123456');     // user-picked colors untouched
+});

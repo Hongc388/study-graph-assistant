@@ -8,7 +8,7 @@ const Database = require('better-sqlite3');
 // on open means "this file is about to be migrated" — so the old file is
 // copied aside first. The database IS the user's study history; a botched
 // migration must never be able to destroy the only copy.
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2; // v2: module colors remapped to the lighter palette
 const BACKUP_KEEP = 5; // rotating daily backups under userData/backups
 
 let db;
@@ -86,7 +86,7 @@ function migrate() {
     code TEXT NOT NULL,
     name TEXT NOT NULL,
     term TEXT DEFAULT '',
-    color TEXT DEFAULT '#085041'
+    color TEXT DEFAULT '#0E7A63'
   );
   CREATE TABLE IF NOT EXISTS topics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -252,6 +252,16 @@ function migrate() {
       ALTER TABLE topic_edges_new RENAME TO topic_edges;
     `);
   }
+  // v2: the calm palette got one step lighter — remap stored module colors to
+  // the new hexes (same hues). Idempotent; user-picked custom colors untouched.
+  const COLOR_REMAP = {
+    '#085041': '#0E7A63', '#3C3489': '#4C43AC', '#712B13': '#8E3A1C',
+    '#72243E': '#92304F', '#791F1F': '#942929', '#27500A': '#33690E',
+    '#444441': '#55544F',
+  };
+  for (const [from, to] of Object.entries(COLOR_REMAP)) {
+    run('UPDATE modules SET color=? WHERE UPPER(color)=?', to, from);
+  }
 }
 
 // ---------- generic helpers ----------
@@ -270,7 +280,7 @@ const listModules = () => all(`
   FROM modules m ORDER BY m.code`);
 const createModule = (m) =>
   run('INSERT INTO modules (code, name, term, color) VALUES (?,?,?,?)',
-    m.code, m.name, m.term || '', m.color || '#085041').lastInsertRowid;
+    m.code, m.name, m.term || '', m.color || '#0E7A63').lastInsertRowid;
 const updateModule = (m) =>
   run('UPDATE modules SET code=?, name=?, term=?, color=?, target_hours=? WHERE id=?',
     m.code, m.name, m.term || '', m.color, m.target_hours ?? null, m.id);

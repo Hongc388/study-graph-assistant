@@ -2,26 +2,27 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  /* Style index */
-  --surface-0: #F7F6F3;
+  /* Style index — same hues as the original calm palette, one step lighter
+     (surfaces closer to white, accent/subject inks brightened). */
+  --surface-0: #FBFAF7;
   --surface-1: #FFFFFF;
-  --surface-2: #F1EFE8;
-  --border: #E5E3DB;
+  --surface-2: #F5F3EC;
+  --border: #E8E6DE;
   --text-primary: #1A1A18;
   --text-secondary: #5C5B57;
   --text-muted: #8A8983;
-  --fill-accent: #0F6E56;
+  --fill-accent: #12866A;
   --radius: 8px;
   --radius-card: 12px;
 
   /* Subject / semantic ramps (bg / text) */
-  --c-teal-bg: #E1F5EE; --c-teal: #085041;
-  --c-purple-bg: #EEEDFE; --c-purple: #3C3489;
-  --c-coral-bg: #FAECE7; --c-coral: #712B13;
-  --c-pink-bg: #FBEAF0; --c-pink: #72243E;
-  --c-gray-bg: #F1EFE8; --c-gray: #444441;
-  --c-red-bg: #FCEBEB; --c-red: #791F1F;
-  --c-green-bg: #EAF3DE; --c-green: #27500A;
+  --c-teal-bg: #E5F8F0; --c-teal: #0E7A63;
+  --c-purple-bg: #F1F0FF; --c-purple: #4C43AC;
+  --c-coral-bg: #FCF0EB; --c-coral: #8E3A1C;
+  --c-pink-bg: #FDEFF4; --c-pink: #92304F;
+  --c-gray-bg: #F5F3EC; --c-gray: #55544F;
+  --c-red-bg: #FDF0F0; --c-red: #942929;
+  --c-green-bg: #F0F7E6; --c-green: #33690E;
 
   /* Back-compat aliases used across the app */
   --bg: var(--surface-0);
