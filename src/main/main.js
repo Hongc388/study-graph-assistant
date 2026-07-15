@@ -10,6 +10,7 @@ const extract = require('./extract');
 const ingest = require('./ingest');
 const organize = require('./organize');
 const { isPreviewable } = require('./preview');
+const log = require('./log');
 
 const DEFAULT_ROOT = path.join(os.homedir(), 'Desktop', 'year_three');
 const SESSION_IDLE_MS = 15000;
@@ -141,10 +142,22 @@ function createWindow() {
     },
   });
   mainWin.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  // A dead renderer looks like a white window with no console — record why.
+  mainWin.webContents.on('render-process-gone', (_, details) =>
+    log.error('renderer.gone', `${details.reason} (exitCode ${details.exitCode})`));
+  mainWin.on('unresponsive', () => log.warn('renderer', 'window unresponsive'));
   mainWin.on('closed', () => { mainWin = null; closePreviewWindow(); });
 }
 
 app.whenReady().then(() => {
+  log.init(path.join(app.getPath('userData'), 'logs'));
+  log.captureProcessErrors((err) => {
+    // Smoke/CI must fail loudly; a user should see what happened, not a vanish.
+    if (process.argv.includes('--smoke')) { console.error(err); app.exit(1); return; }
+    dialog.showErrorBox('Study Graph Assistant — unexpected error',
+      `${err?.stack || err}\n\nDetails were saved to the log (Settings → Open log).`);
+  });
+  log.info('app', `started v${app.getVersion()} electron ${process.versions.electron}`);
   db.open(app.getPath('userData'));
   registerIpc();
   createWindow();
@@ -439,6 +452,10 @@ function registerIpc() {
       } catch (e) { return { ok: false, error: e.message }; }
     },
     'ai:feedback': (_, f) => db.logAiFeedback(f),
+    // crash log (renderer exceptions land in the same file as main's)
+    'log:renderer': (_, e) => log.error('renderer.uncaught',
+      `${e?.message || 'unknown'}${e?.stack ? '\n' + e.stack : ''}`),
+    'log:reveal': () => { if (log.path) shell.showItemInFolder(log.path); },
   };
   for (const [channel, fn] of Object.entries(handlers)) ipcMain.handle(channel, fn);
   ipcMain.on('material:saveProgressSync', (_, payload) => {

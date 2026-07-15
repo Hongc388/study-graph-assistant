@@ -1996,6 +1996,11 @@ async function renderSettings() {
           <input id="pomo-cycles" type="number" min="2" max="8" value="${pomoCfg.cyclesPerLong}" style="width:80px"></div>
         <button id="save-pomo" class="primary" style="align-self:flex-end">Save</button>
       </div>
+    </div>
+    <div class="panel">
+      <h3 style="margin-top:0">Troubleshooting</h3>
+      <p class="muted">Crashes and unexpected errors are recorded to a local log file (never uploaded).</p>
+      <button id="open-log">Open log file</button>
     </div>`;
   view.querySelector('#save-pomo').addEventListener('click', async () => {
     const num = (id, fallback) => Number(view.querySelector(id).value) || fallback;
@@ -2018,9 +2023,18 @@ async function renderSettings() {
     if (p) runIngest(p);
   });
   view.querySelector('#run-index').addEventListener('click', () => runIngest());
+  view.querySelector('#open-log').addEventListener('click', () => api.logReveal());
 }
 
 // ---------- boot ----------
+// Flight recorder: any uncaught renderer exception is sent to the main-process
+// log file, so a blank view on someone else's machine still leaves evidence.
+window.addEventListener('error', (e) =>
+  api.logRenderer({ message: e.message, stack: e.error?.stack }));
+window.addEventListener('unhandledrejection', (e) =>
+  api.logRenderer({ message: `unhandled rejection: ${e.reason?.message || e.reason}`,
+    stack: e.reason?.stack }));
+
 (async function boot() {
   const badge = document.getElementById('st-ai');
   api.aiStatus().then(s => {
