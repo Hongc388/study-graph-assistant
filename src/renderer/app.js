@@ -2065,8 +2065,11 @@ window.addEventListener('unhandledrejection', (e) =>
     badge.textContent = s.ok ? 'AI: local' : 'AI: offline';
     badge.classList.toggle('on', s.ok);
   });
-  if (!location.hash) location.hash = '#/dashboard';
   initPomodoro();
-  route();
+  // Exactly one initial render: assigning a NEW hash fires hashchange (which
+  // routes), so calling route() as well would double-render — the two async
+  // renders interleave and end up attaching duplicate click handlers.
+  if (!location.hash) location.hash = '#/dashboard';
+  else route();
   setInterval(refreshStatus, 60000); // keep "next block" in the status bar fresh
 })();
