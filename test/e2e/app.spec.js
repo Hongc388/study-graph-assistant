@@ -104,6 +104,25 @@ test('notification preferences persist across navigation', async () => {
   await expect(page.locator('#rm-deadlines')).toBeChecked();
 });
 
+test('clicking a calendar day opens its agenda and adds a deadline there', async () => {
+  await page.evaluate(() => { location.hash = '#/schedule/calendar'; });
+  const iso = new Date().toISOString().slice(0, 10);
+  await page.click(`.cal-cell[data-date="${iso}"]`);
+  await expect(page.locator('dialog')).toContainText('Nothing planned for this day yet');
+  await page.click('#dp-dl');
+  // deadline form opens with the clicked day prefilled
+  await expect(page.locator('dialog [name="due_at"]')).toHaveValue(`${iso}T17:00`);
+  await page.fill('dialog [name="title"]', 'Calendar-made deadline');
+  await page.click('dialog button[value="ok"]');
+  await expect(page.locator(`.cal-cell[data-date="${iso}"]`)).toContainText('Calendar-made deadline');
+  // reopening the day shows it on the agenda
+  await page.click(`.cal-cell[data-date="${iso}"]`);
+  await expect(page.locator('dialog')).toContainText('Calendar-made deadline');
+  await page.click('#dp-close');
+  await page.evaluate(() => { location.hash = '#/settings'; }); // where the next test expects to be
+  await expect(page.locator('#rm-enabled')).toBeVisible();
+});
+
 test('settings shows the app version from package.json', async () => {
   const version = require('../../package.json').version;
   await expect(page.locator('#view')).toContainText(`Study Graph Assistant v${version}`);

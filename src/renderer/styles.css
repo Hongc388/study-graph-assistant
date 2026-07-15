@@ -285,6 +285,9 @@ label { font-size: 11px; color: var(--text-muted); display: block; margin-bottom
 }
 .cal-chip .dot { width: 7px; height: 7px; flex: none; margin-right: 2px; }
 .cal-chip.done { opacity: .45; text-decoration: line-through; }
+.cal-cell.day { cursor: pointer; transition: background .12s; }
+.cal-cell.day:hover { background: var(--c-teal-bg); border-color: var(--c-teal); }
+.cal-chip.cal-block { font-family: var(--mono); font-size: 10px; }
 
 .dl-tip {
   position: fixed; z-index: 60; max-width: 240px; background: var(--surface-1);

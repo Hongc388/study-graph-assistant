@@ -14,7 +14,7 @@ const channels = [
   'problems:list', 'problems:create', 'problems:update', 'problems:delete', 'problems:queue', 'sessions:create',
   'edges:list', 'edges:create', 'edges:delete',
   'deadlines:list', 'deadlines:create', 'deadlines:update', 'deadlines:delete',
-  'blocks:list', 'blocks:create', 'blocks:update', 'blocks:delete', 'blocks:duplicate', 'blocks:setStatus', 'blocks:reorder', 'plan:generate',
+  'blocks:list', 'blocks:listRange', 'blocks:create', 'blocks:update', 'blocks:delete', 'blocks:duplicate', 'blocks:setStatus', 'blocks:reorder', 'plan:generate',
   'cards:list', 'cards:due', 'cards:create', 'cards:update', 'cards:delete', 'cards:review', 'cards:counts',
   'pomo:log', 'pomo:stats',
   'settings:get', 'settings:set',

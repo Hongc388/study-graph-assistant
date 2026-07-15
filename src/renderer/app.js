@@ -1861,8 +1861,15 @@ async function renderSchedule() {
   } else if (scheduleTab === 'timeline') {
     body.innerHTML = timelineHtml(dls);
   } else if (scheduleTab === 'calendar') {
-    body.innerHTML = calendarHtml(dls);
+    if (!calCursor) calCursor = today().slice(0, 7);
+    const [cy, cm] = calCursor.split('-').map(Number);
+    const lastDay = String(new Date(cy, cm, 0).getDate()).padStart(2, '0');
+    const monthBlocks = await api.blocksListRange({ from: `${calCursor}-01`, to: `${calCursor}-${lastDay}` });
+    body.innerHTML = calendarHtml(dls, monthBlocks);
     bindCalendarNav();
+    // Apple-Calendar behavior: click any day to see its agenda and plan it.
+    body.querySelectorAll('.cal-cell[data-date]').forEach(cell =>
+      cell.addEventListener('click', () => dayPlanDialog(cell.dataset.date, dls, monthBlocks)));
   }
 
   bindScheduleActions(dls, mods, topics);
@@ -1924,9 +1931,8 @@ async function renderSchedule() {
     <div id="dl-tip" class="dl-tip" hidden></div>`;
   }
 
-  // ----- Calendar -----
-  function calendarHtml(dls) {
-    if (!calCursor) calCursor = today().slice(0, 7);
+  // ----- Calendar (click a day to plan it) -----
+  function calendarHtml(dls, monthBlocks = []) {
     const [Y, M] = calCursor.split('-').map(Number);
     const first = new Date(Y, M - 1, 1);
     const startDow = (first.getDay() + 6) % 7;
@@ -1937,16 +1943,26 @@ async function renderSchedule() {
       if (!byDay.has(key)) byDay.set(key, []);
       byDay.get(key).push(d);
     }
+    const blocksByDay = new Map();
+    for (const b of monthBlocks) {
+      if (!blocksByDay.has(b.date)) blocksByDay.set(b.date, []);
+      blocksByDay.get(b.date).push(b);
+    }
     const cells = [];
     for (let i = 0; i < startDow; i++) cells.push('<div class="cal-cell off"></div>');
     for (let day = 1; day <= daysInMonth; day++) {
       const iso = `${Y}-${String(M).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       const items = byDay.get(iso) || [];
-      cells.push(`<div class="cal-cell ${iso === today() ? 'today' : ''}">
+      const dayBlocks = blocksByDay.get(iso) || [];
+      cells.push(`<div class="cal-cell day ${iso === today() ? 'today' : ''}" data-date="${iso}"
+          title="Click to plan ${iso}">
         <span class="cal-day">${day}</span>
+        ${dayBlocks.map(b => `<span class="cal-chip cal-block ${b.status === 'done' ? 'done' : ''}"
+            title="${esc(b.topic_name || 'study')}">
+          <span class="dot" style="background:${esc(b.module_color || '#8A8983')}"></span>${fmtMin(b.start_min)} ${esc(b.topic_name || 'study')}</span>`).join('')}
         ${items.map(d => `<span class="cal-chip ${d.done ? 'done' : ''}" data-i="${dls.indexOf(d)}"
             title="${esc(d.title)}">
-          <span class="dot" style="background:${esc(d.module_color)}"></span>${esc(d.title)}</span>`).join('')}
+          <span class="dot" style="background:${esc(d.module_color)}"></span>⚑ ${esc(d.title)}</span>`).join('')}
       </div>`);
     }
     const monthName = first.toLocaleString('en', { month: 'long', year: 'numeric' });
@@ -1963,8 +1979,46 @@ async function renderSchedule() {
         ${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => `<div class="cal-head">${d}</div>`).join('')}
         ${cells.join('')}
       </div>
+      <p class="muted" style="margin:8px 0 0">Click any day to see its agenda and add a study block or
+        deadline · <span class="mono">HH:MM</span> chips are planned blocks, ⚑ chips are deadlines.</p>
     </div>
     <div id="dl-tip" class="dl-tip" hidden></div>`;
+  }
+
+  // Day agenda — the click target for every calendar cell.
+  function dayPlanDialog(iso, dls, monthBlocks) {
+    const dayDls = dls.filter(d => d.due_at.slice(0, 10) === iso);
+    const dayBlocks = monthBlocks.filter(b => b.date === iso);
+    const nice = new Date(iso + 'T00:00').toLocaleDateString('en', {
+      weekday: 'long', day: 'numeric', month: 'long' });
+    const dlg = document.createElement('dialog');
+    dlg.innerHTML = `<h3 style="margin-bottom:4px">${esc(nice)}</h3>
+      <p class="muted mono" style="margin:0 0 10px">${esc(iso)}</p>
+      ${dayBlocks.length ? `<div style="margin-bottom:8px"><b>Study blocks</b>
+        <ul style="margin:4px 0 0 18px">${dayBlocks.map(b =>
+          `<li class="muted">${fmtMin(b.start_min)}–${fmtMin(b.end_min)} · ${esc(b.module_code || '')} ${esc(b.topic_name || 'study')}${b.status !== 'planned' ? ` (${b.status})` : ''}</li>`).join('')}
+        </ul></div>` : ''}
+      ${dayDls.length ? `<div style="margin-bottom:8px"><b>Deadlines</b>
+        <ul style="margin:4px 0 0 18px">${dayDls.map(d =>
+          `<li class="muted${d.done ? '' : ''}">⚑ ${esc(d.title)} · ${esc(d.module_code)} at ${esc(d.due_at.slice(11, 16) || '—')}${d.done ? ' (done)' : ''}</li>`).join('')}
+        </ul></div>` : ''}
+      ${!dayBlocks.length && !dayDls.length ? '<p class="muted">Nothing planned for this day yet.</p>' : ''}
+      <div class="row" style="justify-content:flex-end; margin-top:14px">
+        <button id="dp-close">Close</button>
+        <button id="dp-dl">⚑ Deadline</button>
+        <button id="dp-block" class="primary">+ Study block</button>
+      </div>`;
+    document.body.appendChild(dlg);
+    const done = () => { dlg.close(); dlg.remove(); };
+    dlg.querySelector('#dp-close').addEventListener('click', done);
+    dlg.querySelector('#dp-block').addEventListener('click', () => {
+      done(); promptStudyBlock(iso, topics, mods, materials);
+    });
+    dlg.querySelector('#dp-dl').addEventListener('click', () => {
+      done(); promptDeadline(mods, topics, { due_at: `${iso}T17:00` });
+    });
+    dlg.addEventListener('close', () => dlg.remove());
+    dlg.showModal();
   }
 
   function bindCalendarNav() {
@@ -2037,24 +2091,27 @@ async function renderSchedule() {
       if (confirm('Delete deadline?')) { await api.deadlinesDelete(Number(b.dataset.id)); route(); }
     }));
     const addBtn = view.querySelector('#add-dl');
-    if (addBtn) addBtn.addEventListener('click', async () => {
-      if (!mods.length) return alert('Create a module first.');
-      const d = await formDialog('New deadline', [
-        { name: 'title', label: 'Title (e.g. Assignment 2, Midterm)' },
-        { name: 'module_id', label: 'Module', type: 'select',
-          options: mods.map(m => ({ value: m.id, label: `${m.code} ${m.name}` })) },
-        { name: 'topic_id', label: 'Topic (optional — else whole module is urgent)', type: 'select',
-          options: [{ value: '', label: '(whole module)' },
-            ...topics.map(t => ({ value: t.id, label: t.name }))] },
-        { name: 'due_at', label: 'Due', type: 'datetime-local' },
-        { name: 'weight', label: 'Weight (exam 3, assignment 2, quiz 1)', type: 'number', step: '0.5', min: 0.5, value: 1 },
-      ], 'Add');
-      if (d && d.title.trim() && d.due_at) {
-        await api.deadlinesCreate({ ...d, module_id: Number(d.module_id),
-          topic_id: d.topic_id ? Number(d.topic_id) : null, weight: Number(d.weight) });
-        route();
-      }
-    });
+    if (addBtn) addBtn.addEventListener('click', () => promptDeadline(mods, topics));
+  }
+}
+
+// New-deadline dialog; `defaults.due_at` lets the calendar prefill the day.
+async function promptDeadline(mods, topics, defaults = {}) {
+  if (!mods.length) return alert('Create a module first.');
+  const d = await formDialog('New deadline', [
+    { name: 'title', label: 'Title (e.g. Assignment 2, Midterm)' },
+    { name: 'module_id', label: 'Module', type: 'select',
+      options: mods.map(m => ({ value: m.id, label: `${m.code} ${m.name}` })) },
+    { name: 'topic_id', label: 'Topic (optional — else whole module is urgent)', type: 'select',
+      options: [{ value: '', label: '(whole module)' },
+        ...topics.map(t => ({ value: t.id, label: t.name }))] },
+    { name: 'due_at', label: 'Due', type: 'datetime-local', value: defaults.due_at || '' },
+    { name: 'weight', label: 'Weight (exam 3, assignment 2, quiz 1)', type: 'number', step: '0.5', min: 0.5, value: 1 },
+  ], 'Add');
+  if (d && d.title.trim() && d.due_at) {
+    await api.deadlinesCreate({ ...d, module_id: Number(d.module_id),
+      topic_id: d.topic_id ? Number(d.topic_id) : null, weight: Number(d.weight) });
+    route();
   }
 }
 

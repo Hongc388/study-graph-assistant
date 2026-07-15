@@ -347,6 +347,7 @@ function registerIpc() {
     'deadlines:delete': (_, id) => db.deleteDeadline(id),
     // schedule
     'blocks:list': (_, date) => db.listBlocks(date),
+    'blocks:listRange': (_, { from, to }) => db.listBlocksRange(from, to),
     'blocks:create': (_, b) => { db.createBlock(b); return db.listBlocks(b.date); },
     'blocks:update': (_, b) => db.updateBlock(b),
     'blocks:delete': (_, id) => db.deleteBlock(id),

@@ -523,6 +523,13 @@ const listBlocks = (date) => all(`
   LEFT JOIN modules mo ON mo.id = t.module_id
   LEFT JOIN materials ma ON ma.id = b.material_id
   WHERE b.date = ? ORDER BY (b.sort_order IS NULL), b.sort_order, b.start_min`, date);
+// Whole-month fetch for the calendar planner.
+const listBlocksRange = (from, to) => all(`
+  SELECT b.*, t.name AS topic_name, t.module_id, mo.code AS module_code, mo.color AS module_color
+  FROM study_blocks b
+  LEFT JOIN topics t ON t.id = b.topic_id
+  LEFT JOIN modules mo ON mo.id = t.module_id
+  WHERE b.date BETWEEN ? AND ? ORDER BY b.date, b.start_min`, from, to);
 const clearPlannedBlocks = (date) =>
   run("DELETE FROM study_blocks WHERE date=? AND status='planned'", date);
 const createBlock = (b) => {
@@ -859,7 +866,7 @@ module.exports = {
   listStudyToday, listResumeItems,
   listEdges, createEdge, deleteEdge,
   listDeadlines, createDeadline, updateDeadline, deleteDeadline,
-  listBlocks, clearPlannedBlocks, createBlock, getBlock, updateBlock, duplicateBlock, deleteBlock, setBlockStatus, reorderBlocks,
+  listBlocks, listBlocksRange, clearPlannedBlocks, createBlock, getBlock, updateBlock, duplicateBlock, deleteBlock, setBlockStatus, reorderBlocks,
   listProblems, createProblem, updateProblem, deleteProblem, createMaterialSession,
   applyIngest, listModuleNotes, setAboutNotes,
   listReadingNotes, listReadingNoteLinks, createReadingNote, updateReadingNote, deleteReadingNote,
