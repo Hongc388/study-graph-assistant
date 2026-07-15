@@ -7,6 +7,7 @@
     "start": "electron .",
     "test": "node test/run.js",
     "typecheck": "tsc -p tsconfig.json",
+    "test:e2e": "playwright test",
     "rebuild": "electron-rebuild -f -o better-sqlite3",
     "postinstall": "electron-rebuild -f -o better-sqlite3",
     "dist": "electron-builder",
@@ -39,6 +40,7 @@
   "license": "MIT",
   "devDependencies": {
     "@electron/rebuild": "^3.6.0",
+    "@playwright/test": "^1.61.1",
     "@types/node": "^26.1.1",
     "electron": "^33.4.11",
     "electron-builder": "^26.15.3",

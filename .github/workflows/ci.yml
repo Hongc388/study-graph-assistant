@@ -134,6 +134,28 @@ jobs:
           xvfb-run -a npx electron . --smoke --no-sandbox 2>&1 | tee smoke.log
           grep -q SMOKE_OK smoke.log
 
+  # e2e → buttons that stopped working. Smoke proves views render without
+  # errors; Playwright drives real user flows (create module, add section,
+  # settings persistence, reload survival) against a throwaway data dir.
+  e2e:
+    name: E2E user flows (Playwright)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install xvfb for headless Electron
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
+      - name: Full install
+        run: npm ci
+        env:
+          npm_config_optional: false
+      - name: Run Playwright E2E against the real app
+        run: xvfb-run -a npm run test:e2e
+
   # package → asar/path bugs the dev-mode smoke can't see: a file that resolves
   # via node_modules in the repo can vanish or move inside the packaged .app
   # (native modules must be unpacked, pdf.js worker loaded by absolute path, …).

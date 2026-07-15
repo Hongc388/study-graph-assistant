@@ -12,6 +12,11 @@ const organize = require('./organize');
 const { isPreviewable } = require('./preview');
 const log = require('./log');
 
+// E2E tests point the app at a throwaway data dir so they never touch the
+// real database. Must run before app.whenReady resolves paths.
+const userDataArg = process.argv.find(a => a.startsWith('--user-data='));
+if (userDataArg) app.setPath('userData', userDataArg.slice('--user-data='.length));
+
 const DEFAULT_ROOT = path.join(os.homedir(), 'Desktop', 'year_three');
 const SESSION_IDLE_MS = 15000;
 

@@ -11,3 +11,5 @@ userData/
 .env
 *.zip
 .electron/
+test-results/
+playwright-report/
