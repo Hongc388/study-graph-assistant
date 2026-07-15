@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com); versions follow
 
 ## [Unreleased]
 
+### Added
+- Distributable builds via electron-builder (`npm run pack` / `npm run dist`);
+  CI boots the packaged .app to catch asar/path regressions.
+- Playwright end-to-end tests driving real user flows against a throwaway
+  data directory (`npm run test:e2e`), also in CI.
+- Type checking of the main process and shared engines (`npm run typecheck`).
+
+### Fixed
+- Boot rendered the first view twice (explicit `route()` plus the `hashchange`
+  event), attaching duplicate click handlers — dialogs could open doubled.
+
 ## [0.1.0] — 2026-07-15
 
 First feature-complete local build.
