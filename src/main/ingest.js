@@ -36,6 +36,9 @@ const MAX_FILES_PER_MODULE = 400;
 const MAX_TOPICS_PER_MODULE = 25;
 
 const TYPE_BY_HINT = [
+  // course-description files, not study content ("01-introduction.pdf" is NOT
+  // matched — that's usually a real first lecture; the AI type check covers it)
+  [/syllabus|handbook|module[-_ ]?(guide|info|overview|intro)|welcome|about[-_ ]?(the[-_ ]?)?module/i, 'overview'],
   [/assignment|problemset|coursework|homework|hw\d/i, 'assignment'],
   [/exam|past.?paper|midterm|quiz/i, 'exam-prep'],
   [/_\d{1,2}_(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*_\d{4}/i, 'exam-prep'], // "COMP3001_07_May_2026.pdf"
