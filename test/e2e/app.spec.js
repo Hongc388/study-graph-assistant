@@ -68,6 +68,18 @@ test('pomodoro settings persist across navigation', async () => {
   await expect(page.locator('#pomo-work')).toHaveValue('30');
 });
 
+test('notification preferences persist across navigation', async () => {
+  await page.evaluate(() => { location.hash = '#/settings'; });
+  await expect(page.locator('#rm-enabled')).toBeChecked(); // on by default
+  await page.uncheck('#rm-streak');
+  await page.click('#save-remind');
+  await page.evaluate(() => { location.hash = '#/dashboard'; });
+  await expect(page.locator('#add-mod')).toBeVisible();
+  await page.evaluate(() => { location.hash = '#/settings'; });
+  await expect(page.locator('#rm-streak')).not.toBeChecked();
+  await expect(page.locator('#rm-deadlines')).toBeChecked();
+});
+
 test('settings shows the app version from package.json', async () => {
   const version = require('../../package.json').version;
   await expect(page.locator('#view')).toContainText(`Study Graph Assistant v${version}`);

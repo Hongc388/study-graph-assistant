@@ -20,7 +20,7 @@ const channels = [
   'settings:get', 'settings:set',
   'ai:status', 'ai:suggestTopics', 'ai:suggestEdges',
   'ai:classifyModule', 'ai:suggestNoteLinks', 'ai:feedback',
-  'log:renderer', 'log:reveal',
+  'log:renderer', 'log:reveal', 'notify:show',
   'db:export', 'db:import', 'app:info',
 ];
 

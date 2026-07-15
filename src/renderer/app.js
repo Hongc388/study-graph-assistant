@@ -364,9 +364,9 @@ async function initPomodoro() {
 }
 
 function notifyUser(title, body) {
-  try {
-    if (Notification.permission !== 'denied') new Notification(title, { body });
-  } catch { /* notifications unavailable — the toast below still shows */ }
+  // Main decides whether an OS notification is warranted (only when the window
+  // is unfocused, and only if enabled in Settings); the toast always shows.
+  api.notifyShow({ title, body }).catch(() => {});
   toastStatus(title);
 }
 
@@ -1952,10 +1952,16 @@ async function renderSchedule() {
 
 // ---------- Settings ----------
 async function renderSettings() {
-  const [model, aiStat, root, pomoEnabled, pomoCfgRaw, appInfo] = await Promise.all([
+  const [model, aiStat, root, pomoEnabled, pomoCfgRaw, appInfo, remindRaw] = await Promise.all([
     api.settingsGet('ollama_model'), api.aiStatus(), api.ingestDefaultRoot(),
-    api.settingsGet('pomodoro_enabled'), api.settingsGet('pomodoro_cfg'), api.appInfo()]);
+    api.settingsGet('pomodoro_enabled'), api.settingsGet('pomodoro_cfg'), api.appInfo(),
+    api.settingsGet('reminders.prefs')]);
   const pomoCfg = { ...Pomodoro.DEFAULTS, ...JSON.parse(pomoCfgRaw || '{}') };
+  const remind = Reminders.normalizePrefs(remindRaw);
+  const remindRow = (id, label, hint) => `
+    <label style="display:flex; align-items:center; gap:6px; margin:4px 0 4px 20px; cursor:pointer">
+      <input type="checkbox" id="rm-${id}" ${remind[id] ? 'checked' : ''}> ${label}
+      <span class="muted">— ${hint}</span></label>`;
   view.innerHTML = `
     <h2>Settings</h2>
     <div class="panel">
@@ -1998,6 +2004,22 @@ async function renderSettings() {
       </div>
     </div>
     <div class="panel">
+      <h3 style="margin-top:0">Notifications</h3>
+      <p class="muted">Reminders about your own study data, nothing else — no news, no promotions.
+        Each fires at most once (per day where daily), and only while the app is running.</p>
+      <label style="display:flex; align-items:center; gap:6px; margin:8px 0; cursor:pointer">
+        <input type="checkbox" id="rm-enabled" ${remind.enabled ? 'checked' : ''}>
+        <b>Enable notifications</b></label>
+      ${remindRow('deadlines', 'Deadlines', 'a heads-up 3 days out, 1 day out, and on the day')}
+      ${remindRow('reviews', 'Flashcards due', 'one morning reminder when reviews are waiting')}
+      ${remindRow('blocks', 'Study blocks', 'a nudge just before a planned block starts')}
+      ${remindRow('pomodoro', 'Pomodoro', 'work done / break over, only when the window is in the background')}
+      ${remindRow('streak', 'Streak protection', 'one evening nudge before a study streak breaks')}
+      <div class="row" style="margin-top:8px">
+        <button id="save-remind" class="primary">Save</button>
+      </div>
+    </div>
+    <div class="panel">
       <h3 style="margin-top:0">Data &amp; backups</h3>
       <p class="muted">Everything lives in one local database file. The app keeps a rotating daily
         backup automatically, and copies the file aside before any schema upgrade. Export gives you
@@ -2025,6 +2047,18 @@ async function renderSettings() {
     }));
     await initPomodoro();
     toastStatus('pomodoro settings saved');
+  });
+  view.querySelector('#save-remind').addEventListener('click', async () => {
+    const on = (id) => view.querySelector(`#rm-${id}`).checked;
+    await api.settingsSet('reminders.prefs', JSON.stringify({
+      enabled: on('enabled'),
+      deadlines: on('deadlines'),
+      reviews: on('reviews'),
+      blocks: on('blocks'),
+      pomodoro: on('pomodoro'),
+      streak: on('streak'),
+    }));
+    toastStatus('notification settings saved');
   });
   view.querySelector('#save-model').addEventListener('click', async () => {
     await api.settingsSet('ollama_model', view.querySelector('#model').value.trim());

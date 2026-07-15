@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -11,6 +11,7 @@ const ingest = require('./ingest');
 const organize = require('./organize');
 const { isPreviewable } = require('./preview');
 const log = require('./log');
+const reminders = require('../shared/reminders');
 
 // E2E tests point the app at a throwaway data dir so they never touch the
 // real database. Must run before app.whenReady resolves paths.
@@ -166,6 +167,13 @@ app.whenReady().then(() => {
   db.open(app.getPath('userData'));
   registerIpc();
   createWindow();
+  // Study reminders (deadlines, due cards, planned blocks, streak): every
+  // minute a DB snapshot goes through the pure engine in shared/reminders.js.
+  // Sent keys persist in settings, so a restart never repeats a notification.
+  if (!process.argv.includes('--smoke')) {
+    setTimeout(checkReminders, 5000); // let the window settle first
+    setInterval(checkReminders, 60000);
+  }
   // CI smoke mode: boot everything (DB open, migrations, IPC, window load),
   // then walk every view so renderer errors fail the job too, then exit 0.
   if (process.argv.includes('--smoke')) {
@@ -199,6 +207,31 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
+
+function checkReminders(now = new Date()) {
+  try {
+    if (!Notification.isSupported()) return;
+    const prefs = reminders.normalizePrefs(db.getSetting('reminders.prefs'));
+    if (!prefs.enabled) return;
+    let sent = {};
+    try { sent = JSON.parse(db.getSetting('reminders.sent') || '{}'); } catch { /* start fresh */ }
+    const today = reminders.localDateStr(now);
+    const due = reminders.dueReminders({
+      now, prefs, sent,
+      deadlines: db.listDeadlines(),
+      dueCards: db.cardCounts(now.toISOString()).reduce((n, r) => n + (r.due || 0), 0),
+      blocks: db.listBlocks(today),
+      stats: db.pomodoroStats(),
+    });
+    if (!due.length) return;
+    for (const r of due) {
+      new Notification({ title: r.title, body: r.body }).show();
+      sent[r.key] = today;
+      log.info('reminders', `${r.category}: ${r.title}`);
+    }
+    db.setSetting('reminders.sent', JSON.stringify(reminders.pruneSent(sent, now)));
+  } catch (e) { log.error('reminders', e); }
+}
 
 // Pick the model to use: explicit setting first, else whatever Ollama has pulled.
 async function resolveModel() {
@@ -484,6 +517,15 @@ function registerIpc() {
         mainWin.webContents.reload(); // renderer state is all derived from the DB
         return { ok: true };
       } catch (e) { return { ok: false, error: e.message }; }
+    },
+    // OS notification for renderer events (pomodoro done / break over). Shown
+    // only when the window is unfocused — in focus the in-app toast suffices.
+    'notify:show': (_, n) => {
+      const prefs = reminders.normalizePrefs(db.getSetting('reminders.prefs'));
+      if (!prefs.enabled || !prefs.pomodoro) return false;
+      if (mainWin?.isFocused() || !Notification.isSupported()) return false;
+      new Notification({ title: String(n?.title || ''), body: String(n?.body || '') }).show();
+      return true;
     },
     // crash log (renderer exceptions land in the same file as main's)
     'log:renderer': (_, e) => log.error('renderer.uncaught',
