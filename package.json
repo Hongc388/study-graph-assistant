@@ -29,6 +29,7 @@
       "node_modules/pdfjs-dist/**"
     ],
     "mac": {
+      "icon": "build/icon.icns",
       "category": "public.app-category.education",
       "target": [
         "dmg",
