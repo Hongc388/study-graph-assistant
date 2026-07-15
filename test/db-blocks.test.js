@@ -175,3 +175,21 @@ test('recent access loop keeps only MAX_RECENT_ACCESS materials', (t) => {
   assert.ok(after.has(ids[0]));
   assert.strictEqual(after.size, db.MAX_RECENT_ACCESS);
 });
+
+test('setAboutNotes replaces the AI fact set atomically', (t) => {
+  if (skipDb) return t.skip('better-sqlite3 not built for this Node ABI (OK under Electron rebuild)');
+  const modId = db.createModule({ code: 'ABOUT1', name: 'About test' });
+  db.setAboutNotes(modId, [
+    { label: 'goal', fact: 'Understand ML basics' },
+    { label: 'assessment', fact: '75% exam, 25% coursework' },
+  ], 'handbook.pdf');
+  let notes = db.listModuleNotes(modId).filter(n => n.kind === 'about');
+  assert.strictEqual(notes.length, 2);
+  assert.strictEqual(notes[0].content, 'goal: Understand ML basics');
+  assert.strictEqual(notes[0].source, 'handbook.pdf');
+  // re-running replaces, never appends
+  db.setAboutNotes(modId, [{ label: 'exam', fact: '2h closed book' }], 'welcome.pdf');
+  notes = db.listModuleNotes(modId).filter(n => n.kind === 'about');
+  assert.strictEqual(notes.length, 1);
+  assert.strictEqual(notes[0].content, 'exam: 2h closed book');
+});

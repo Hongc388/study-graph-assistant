@@ -474,6 +474,26 @@ function registerIpc() {
     },
     // Read each file's actual text and classify it — the filename heuristic
     // can't tell a "welcome to this module" PDF from a real lecture.
+    // Read one course-info file and distill labeled module facts for the
+    // About panel. Triggered when a file is dragged into the About box.
+    'ai:summarizeOverview': async (_, { moduleId, materialId }) => {
+      try {
+        const model = await resolveModel();
+        const mod = db.listModules().find(m => m.id === moduleId);
+        const mat = db.listMaterials(moduleId).find(m => m.id === materialId);
+        if (!mat || !mat.path || /^https?:/i.test(mat.path)) {
+          return { ok: false, error: 'No local file to read' };
+        }
+        const { text } = await extract.extractText(mat.path);
+        const items = await ai.summarizeOverview(model, {
+          moduleName: mod?.name || '', title: mat.title, text,
+        });
+        if (!items.length) return { ok: false, error: 'The model found no module facts in this file' };
+        db.setAboutNotes(moduleId, items, mat.title);
+        log.info('ai', `about summary for module ${moduleId} from "${mat.title}" (${items.length} facts)`);
+        return { ok: true, count: items.length };
+      } catch (e) { return { ok: false, error: e.message }; }
+    },
     'ai:classifyModule': async (ev, moduleId) => {
       try {
         const model = await resolveModel();

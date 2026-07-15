@@ -888,6 +888,7 @@ async function renderModule(idStr) {
   if (!mod) { view.innerHTML = '<p class="error">Module not found.</p>'; return; }
   const tips = notes.filter(n => n.kind === 'tip');
   const assessment = notes.find(n => n.kind === 'assessment');
+  const aboutNotes = notes.filter(n => n.kind === 'about'); // AI-extracted "label: fact"
   // Course-info files (handbook, syllabus, "about this module" slides) are not
   // study material: they get their own panel and stay off the study board.
   const aboutMats = materials.filter(m => m.type === 'overview');
@@ -909,13 +910,25 @@ async function renderModule(idStr) {
       <h3 style="margin-top:0">About this module — goals &amp; strategy</h3>
       ${assessment ? `<div class="muted mono">${esc(assessment.content)}</div>` : ''}
       ${tips.length ? `<ul style="margin:6px 0 6px 18px">${tips.map(t => `<li class="muted">${esc(t.content)}</li>`).join('')}</ul>` : ''}
+      ${aboutNotes.length ? `<div class="muted" style="font-size:12px; margin-top:6px">✨ Key info
+          <span style="font-size:11px">(AI, from ${esc(aboutNotes[0].source || 'course-info file')})</span></div>
+        <ul style="margin:4px 0 6px 18px">${aboutNotes.map(n => {
+          const i = n.content.indexOf(': ');
+          const label = i > 0 ? n.content.slice(0, i) : '';
+          const fact = i > 0 ? n.content.slice(i + 2) : n.content;
+          return `<li class="muted">${label ? `<b>${esc(label)}:</b> ` : ''}${esc(fact)}</li>`;
+        }).join('')}</ul>` : ''}
       <p class="muted" style="margin:6px 0 8px">Course-info files live here (handbook, syllabus, welcome
-        slides …), separate from the study board. <b>Drag any file card in or out yourself</b> —
-        double-click opens it.</p>
+        slides …), separate from the study board. <b>Drag a file in</b> and the local AI reads it and
+        fills the key info above — double-click opens the file.</p>
       <div class="row about-mats about-drop" id="about-drop" style="min-height:44px">
         ${aboutMats.map(matChipHtml).join('')
           || '<span class="muted slot-hint">Drag course-info files here from the board below</span>'}
       </div>
+      ${aboutMats.length ? `<div class="row" style="margin-top:8px">
+        <button id="about-summarize" class="small">✨ ${aboutNotes.length ? 'Re-extract' : 'Extract'} key info (AI)</button>
+        <span id="about-msg" class="muted"></span>
+      </div>` : ''}
     </div>
 
     <div class="row" style="margin:8px 0">
@@ -1014,6 +1027,26 @@ async function renderModule(idStr) {
     await api.materialsUpdate({ ...mat, type: 'overview', topic_id: null });
     toastStatus(`${mat.title} → About this module`);
     route();
+    // Distill the dropped file into labeled facts (slow local model — runs in
+    // the background; the view refreshes when it lands, if still open).
+    const ai = await api.aiStatus();
+    if (!ai.ok) return;
+    toastStatus(`✨ reading ${mat.title}… (local AI, ~30s)`);
+    const r = await api.aiSummarizeOverview({ moduleId: id, materialId: mat.id });
+    toastStatus(r.ok ? `✨ ${r.count} key facts extracted from ${mat.title}`
+                     : `✨ summary skipped: ${r.error}`);
+    if (r.ok && location.hash === `#/module/${id}`) route();
+  });
+
+  view.querySelector('#about-summarize')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const msg = view.querySelector('#about-msg');
+    btn.disabled = true;
+    msg.textContent = `reading ${aboutMats[0].title}… (local AI, ~30s)`;
+    const r = await api.aiSummarizeOverview({ moduleId: id, materialId: aboutMats[0].id });
+    if (r.ok && location.hash === `#/module/${id}`) { route(); return; }
+    btn.disabled = false;
+    msg.textContent = r.ok ? '' : `skipped: ${r.error}`;
   });
 
   view.querySelector('#del-mod').addEventListener('click', async () => {

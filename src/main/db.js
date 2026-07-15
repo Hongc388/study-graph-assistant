@@ -711,6 +711,16 @@ function classifyLazy(name) { return require('./ingest').classify(name); }
 
 const listModuleNotes = (moduleId) =>
   all('SELECT * FROM module_notes WHERE module_id=? ORDER BY kind DESC, id', moduleId);
+// AI-extracted facts for the About panel ("label: fact" per row). Re-running
+// replaces the whole set, so stale facts never linger.
+function setAboutNotes(moduleId, items, source) {
+  run('DELETE FROM module_notes WHERE module_id=? AND kind=?', moduleId, 'about');
+  for (const it of items) {
+    run('INSERT INTO module_notes (module_id, kind, content, source) VALUES (?,?,?,?)',
+      moduleId, 'about', `${it.label}: ${it.fact}`, source || '');
+  }
+  return items.length;
+}
 
 // ---------- reading notes (concept nodes while studying a material) ----------
 const listReadingNotes = (materialId) =>
@@ -851,7 +861,7 @@ module.exports = {
   listDeadlines, createDeadline, updateDeadline, deleteDeadline,
   listBlocks, clearPlannedBlocks, createBlock, getBlock, updateBlock, duplicateBlock, deleteBlock, setBlockStatus, reorderBlocks,
   listProblems, createProblem, updateProblem, deleteProblem, createMaterialSession,
-  applyIngest, listModuleNotes,
+  applyIngest, listModuleNotes, setAboutNotes,
   listReadingNotes, listReadingNoteLinks, createReadingNote, updateReadingNote, deleteReadingNote,
   linkReadingNotes, unlinkReadingNotes, getReadingNoteGraph,
   listCards, listDueCards, createCard, updateCard, deleteCard, reviewCard, cardCounts,

@@ -19,7 +19,7 @@ const channels = [
   'pomo:log', 'pomo:stats',
   'settings:get', 'settings:set',
   'ai:status', 'ai:suggestTopics', 'ai:suggestEdges',
-  'ai:classifyModule', 'ai:suggestNoteLinks', 'ai:feedback',
+  'ai:classifyModule', 'ai:suggestNoteLinks', 'ai:feedback', 'ai:summarizeOverview',
   'log:renderer', 'log:reveal', 'notify:show', 'preview:timerPush', 'pomo:askBreak',
   'db:export', 'db:import', 'app:info',
 ];

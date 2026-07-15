@@ -132,6 +132,38 @@ Reply with JSON only: {"type": "...", "confidence": 0.0-1.0, "reason": "one shor
   return j;
 }
 
+const ABOUT_LABELS = ['goal', 'assessment', 'exam', 'deadline', 'topics', 'contact', 'advice'];
+
+/** Extract labeled module-level facts from a course-info document (handbook,
+ *  syllabus, welcome slides) — shown in the module's About panel. */
+async function summarizeOverview(model, { moduleName, title, text }) {
+  if (!text) throw new Error('No text could be extracted from this file');
+  const prompt = `You are reading the course-information document "${title}" for the university course "${moduleName}".
+Extract the most important MODULE-LEVEL facts a student needs. Use ONLY what the document states — never invent.
+Allowed labels: ${ABOUT_LABELS.join(', ')}.
+- goal: what the module is about / learning outcomes
+- assessment: how the grade is composed (weightings)
+- exam: exam format, length, what is allowed
+- deadline: concrete dates for coursework or exams
+- topics: main topics covered
+- contact: lecturer / office hours / where to ask questions
+- advice: how the course itself recommends studying
+
+Document text (beginning):
+"""
+${text}
+"""
+
+Reply with JSON only: [{"label": "...", "fact": "one short sentence"}]. 3 to 10 items; skip labels the document says nothing about.`;
+  const out = await ollamaChat(model, prompt);
+  const arr = extractJson(out);
+  if (!Array.isArray(arr)) throw new Error('Model did not return a list');
+  return arr
+    .filter(i => i && ABOUT_LABELS.includes(String(i.label).toLowerCase()) && i.fact)
+    .map(i => ({ label: String(i.label).toLowerCase(), fact: String(i.fact).trim() }))
+    .slice(0, 10);
+}
+
 /** Suggest links between a material's concept notes. `examples` are past
  *  accept/reject decisions ({a, b, accepted}) for few-shot grounding. */
 async function suggestNoteLinks(model, materialTitle, notes, examples = []) {
@@ -157,4 +189,4 @@ Reply with JSON only: [{"from": id, "to": id, "why": "short reason"}]. Max 8 lin
 }
 
 module.exports = { status, ensureRunning, suggestTopics, suggestEdges,
-  classifyMaterial, suggestNoteLinks, MATERIAL_TYPES };
+  classifyMaterial, suggestNoteLinks, summarizeOverview, MATERIAL_TYPES, ABOUT_LABELS };
