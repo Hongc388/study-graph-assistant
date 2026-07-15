@@ -22,6 +22,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com); versions follow
 - The About panel is a manual drag-in/out zone; dropping a file there makes
   the local AI read it and fill in labeled key facts (goal, assessment, exam,
   deadlines, topics, contact, advice), shown like the strategy tips.
+- The Calendar tab is now a planner: it shows study blocks (HH:MM chips) and
+  deadlines (⚑ chips) for the whole month, and clicking any day opens its
+  agenda with "+ Study block" / "⚑ Deadline" for that date — plan tomorrow
+  and beyond, not just today.
 - Custom app icon (a learning-path graph mark), rendered from an SVG source
   into the macOS `.icns` by `scripts/make-icns.sh`.
 - Study reminder notifications — deadlines (3 days / 1 day / on the day),
