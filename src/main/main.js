@@ -452,6 +452,7 @@ function registerIpc() {
       } catch (e) { return { ok: false, error: e.message }; }
     },
     'ai:feedback': (_, f) => db.logAiFeedback(f),
+    'app:info': () => ({ version: app.getVersion(), electron: process.versions.electron }),
     // data safety: user-driven backup and restore of the whole database
     'db:export': async () => {
       const { canceled, filePath } = await dialog.showSaveDialog(mainWin, {

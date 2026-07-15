@@ -21,7 +21,7 @@ const channels = [
   'ai:status', 'ai:suggestTopics', 'ai:suggestEdges',
   'ai:classifyModule', 'ai:suggestNoteLinks', 'ai:feedback',
   'log:renderer', 'log:reveal',
-  'db:export', 'db:import',
+  'db:export', 'db:import', 'app:info',
 ];
 
 const api = {};

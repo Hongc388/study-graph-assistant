@@ -1952,9 +1952,9 @@ async function renderSchedule() {
 
 // ---------- Settings ----------
 async function renderSettings() {
-  const [model, aiStat, root, pomoEnabled, pomoCfgRaw] = await Promise.all([
+  const [model, aiStat, root, pomoEnabled, pomoCfgRaw, appInfo] = await Promise.all([
     api.settingsGet('ollama_model'), api.aiStatus(), api.ingestDefaultRoot(),
-    api.settingsGet('pomodoro_enabled'), api.settingsGet('pomodoro_cfg')]);
+    api.settingsGet('pomodoro_enabled'), api.settingsGet('pomodoro_cfg'), api.appInfo()]);
   const pomoCfg = { ...Pomodoro.DEFAULTS, ...JSON.parse(pomoCfgRaw || '{}') };
   view.innerHTML = `
     <h2>Settings</h2>
@@ -2011,6 +2011,8 @@ async function renderSettings() {
       <h3 style="margin-top:0">Troubleshooting</h3>
       <p class="muted">Crashes and unexpected errors are recorded to a local log file (never uploaded).</p>
       <button id="open-log">Open log file</button>
+      <p class="muted" style="margin-top:12px">Study Graph Assistant v${esc(appInfo.version)}
+        · Electron ${esc(appInfo.electron)}</p>
     </div>`;
   view.querySelector('#save-pomo').addEventListener('click', async () => {
     const num = (id, fallback) => Number(view.querySelector(id).value) || fallback;
