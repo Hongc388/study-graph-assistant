@@ -16,6 +16,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com); versions follow
 ### Added
 - The focus/pomodoro timer now also shows inside the material preview window,
   where the actual reading happens.
+- "About this module" panel: course-info files (handbook, syllabus, welcome,
+  timetable, marking scheme …) sit above the study board instead of mixing
+  with lectures; more filename patterns are recognized at index time.
 - Custom app icon (a learning-path graph mark), rendered from an SVG source
   into the macOS `.icns` by `scripts/make-icns.sh`.
 - Study reminder notifications — deadlines (3 days / 1 day / on the day),
