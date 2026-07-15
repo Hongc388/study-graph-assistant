@@ -56,6 +56,22 @@ test('a section (topic) can be added to the module', async () => {
   await expect(page.locator('#view')).toContainText('Locator Strategies');
 });
 
+test('course-info files sit in About this module, off the study board', async () => {
+  await page.evaluate(async () => {
+    const mod = (await window.api.modulesList())[0];
+    await window.api.materialsCreate({ module_id: mod.id, title: 'Module handbook', path: '/x/handbook.pdf', type: 'overview' });
+    await window.api.materialsCreate({ module_id: mod.id, title: 'Lecture 01', path: '/x/lec01.pdf', type: 'lecture' });
+    location.hash = '#/dashboard'; // leave…
+  });
+  await expect(page.locator('#add-mod')).toBeVisible();
+  await page.click('.card'); // …and re-enter the module view
+  await expect(page.locator('#about-module')).toContainText('Module handbook');
+  await expect(page.locator('#about-module .mat-card')).toHaveCount(1);
+  // the handbook is NOT on the study board; the lecture is (in the inbox)
+  await expect(page.locator('.inbox-panel')).toContainText('Lecture 01');
+  await expect(page.locator('.inbox-panel')).not.toContainText('Module handbook');
+});
+
 test('pomodoro settings persist across navigation', async () => {
   await page.evaluate(() => { location.hash = '#/settings'; });
   await page.check('#pomo-on');

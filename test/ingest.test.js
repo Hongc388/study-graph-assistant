@@ -61,6 +61,17 @@ test('classify tags exam papers and problem sets', () => {
   assert.strictEqual(classify('01-camera-models.pdf'), 'lecture');
 });
 
+test('classify separates course-info files from study material', () => {
+  for (const f of ['module-handbook.pdf', 'COMP3009_syllabus.pdf', 'Welcome slides.pptx',
+    'about_the_module.pdf', 'course-outline-2026.pdf', 'timetable_spring.pdf',
+    'marking-scheme.pdf', 'staff_contacts.md']) {
+    assert.strictEqual(classify(f), 'overview', f);
+  }
+  // a real first lecture must stay a lecture
+  assert.strictEqual(classify('01-introduction.pdf'), 'lecture');
+  assert.strictEqual(classify('02-course-of-values-recursion.pdf'), 'lecture');
+});
+
 test('seqFromFilename reads lecture numbers and Unit/Block markers', () => {
   assert.strictEqual(seqFromFilename('01-camera-models.pdf'), 1);
   assert.strictEqual(seqFromFilename('08-monocular_depth_estimation.pdf'), 8);

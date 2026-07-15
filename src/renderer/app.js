@@ -888,6 +888,10 @@ async function renderModule(idStr) {
   if (!mod) { view.innerHTML = '<p class="error">Module not found.</p>'; return; }
   const tips = notes.filter(n => n.kind === 'tip');
   const assessment = notes.find(n => n.kind === 'assessment');
+  // Course-info files (handbook, syllabus, "about this module" slides) are not
+  // study material: they get their own panel and stay off the study board.
+  const aboutMats = materials.filter(m => m.type === 'overview');
+  const studyMats = materials.filter(m => m.type !== 'overview');
 
   view.innerHTML = `
     <div class="row" style="justify-content:space-between">
@@ -905,6 +909,14 @@ async function renderModule(idStr) {
       ${assessment ? `<div class="muted mono">${esc(assessment.content)}</div>` : ''}
       ${tips.length ? `<h3 style="margin-top:8px">Strategy (from strategy.md)</h3>
         <ul style="margin-left:18px">${tips.map(t => `<li class="muted">${esc(t.content)}</li>`).join('')}</ul>` : ''}
+    </div>` : ''}
+
+    ${aboutMats.length ? `<div class="panel" id="about-module">
+      <h3 style="margin-top:0">About this module</h3>
+      <p class="muted" style="margin:0 0 8px">Course info — handbook, syllabus, welcome slides. Kept
+        separate from the study board so they don't mix with lectures. Double-click to open; drag one
+        onto the board if it's actually study material.</p>
+      <div class="row about-mats">${aboutMats.map(matChipHtml).join('')}</div>
     </div>` : ''}
 
     <div class="row" style="margin:8px 0">
@@ -929,16 +941,16 @@ async function renderModule(idStr) {
           <b>Inbox</b>
           <span class="muted" style="font-size:12px; margin-left:6px">unassigned files</span>
         </div>
-        <span class="kanban-count">${materials.filter(m => !m.topic_id).length}</span>
+        <span class="kanban-count">${studyMats.filter(m => !m.topic_id).length}</span>
       </div>
       <div class="slot-grid section-kanban">
         <div class="slot-col kanban-col">
           <div class="slot-head kanban-col-head" style="border-top-color:${SLOT_COLORS.other}">
             <span>Unsorted</span>
-            <span class="kanban-count">${materials.filter(m => !m.topic_id).length}</span>
+            <span class="kanban-count">${studyMats.filter(m => !m.topic_id).length}</span>
           </div>
           <div class="inbox-drop slot-drop kanban-drop" data-slot="other">
-            ${materials.filter(m => !m.topic_id).map(matChipHtml).join('')
+            ${studyMats.filter(m => !m.topic_id).map(matChipHtml).join('')
               || '<span class="muted slot-hint">Drop here to unassign · import or re-index to fill</span>'}
           </div>
         </div>
@@ -947,7 +959,7 @@ async function renderModule(idStr) {
 
     <div id="section-board">
       ${topics.length ? topics.map(t => {
-        const secMats = materials.filter(m => m.topic_id === t.id);
+        const secMats = studyMats.filter(m => m.topic_id === t.id);
         return `<div class="section-board-wrap section-card" data-section="${t.id}">
           <div class="section-board-head">
             <div>
