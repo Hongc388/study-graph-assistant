@@ -43,12 +43,55 @@ Check the exact version needed with
 Install [Ollama](https://ollama.com), then:
 
 ```sh
-ollama pull llama3.2
+ollama pull qwen2.5
 ```
 
-The sidebar badge shows "AI: local model ready" when connected. AI can suggest
-topics for a module (from material titles) and links between topics; you
-accept/reject each one. Without Ollama everything else works normally.
+If Ollama is installed but not running, the app starts it automatically on
+launch. The sidebar badge shows "AI: local model ready" when connected.
+Without Ollama everything else works normally. All AI output is
+suggestion-only — you accept or reject each item, nothing is applied silently:
+
+- **Suggest sections / links between topics** (from material titles).
+- **Check file types** (module view) — reads each file's actual text (PDF text
+  layer, markdown, notebooks) and re-classifies it by content, catching e.g. an
+  "about this module" PDF filed as a lecture. Files without a text layer
+  (scanned slides) are judged from the filename only and flagged as
+  low-confidence. The new `overview` type marks course-description documents
+  (syllabus, module guide) that are *not* study content.
+- **Suggest note links** (notes dialog) — proposes edges between the concepts
+  you captured while reading.
+
+Every accept/reject decision is logged (`ai_feedback` table) and fed back into
+future prompts as examples, so suggestions adapt to your judgment over time —
+and the log doubles as a training dataset if the model is ever fine-tuned.
+
+## Flashcards (spaced repetition)
+
+The **▧ Flashcards** view reviews cards with the SM-2 algorithm: rate a card
+Again / Hard / Good / Easy and it comes back in 10 minutes / ~1 day / 1→6→ease-multiplied
+days accordingly (each button previews its interval). Cards belong to a topic;
+pause (suspend) or delete them from the browser table. New cards are due
+immediately.
+
+## Pomodoro coach
+
+Enable it in Settings. It rides on the material focus timer, so **only focused
+study time counts** toward the work interval (default 25 min). Completed
+pomodoros trigger a break reminder (5 min short, 15 min long every 4th), are
+logged to the database, and the status bar shows the countdown, today's count
+and your day streak.
+
+## How readiness is computed
+
+Readiness (the per-topic bar) is **derived, never typed in**, from two signals:
+
+- **problems** — (solved + 0.3 × attempted) ÷ total, up to 100%. Proven competence.
+- **study time** — logged minutes on the topic's materials, capped at 60%
+  (5 hours reaches the cap). Reading alone never looks "mastered".
+
+Readiness is the **higher** of the two, so tagging problems never erases
+progress from study time, and solving problems counts even with no time logged.
+Hover a topic's bar to see both components.
 
 ## How the day planner decides
 
@@ -77,7 +120,7 @@ Each job exists because of a specific failure mode this project has hit:
 | `commit-lint` | Commit messages drifting from the repo convention | Validates every commit on the branch against `type: description` / `JIRA-1234 type: description` (types: chore, ci, docs, feat, fix, perf, refactor, revert, style, test; Merge/Revert exempt) |
 | `unit-tests` | Logic regressions in the scheduler and ingest | `npm test` on a 4-way matrix (Node 20/22 × Ubuntu/macOS). Installs with `--ignore-scripts` + `ELECTRON_SKIP_BINARY_DOWNLOAD=1` so it never pays the ~100 MB Electron download — the code under test is pure Node |
 | `native-build` | `NODE_MODULE_VERSION` ABI mismatch between better-sqlite3 and Electron (the exact crash from first install) | Full `npm ci` on macOS (downloads Electron, compiles the native module, runs electron-rebuild), then loads better-sqlite3 *inside Electron's Node* (`ELECTRON_RUN_AS_NODE`) and executes a real SQL statement |
-| `smoke` | Main-process crashes at boot: broken DB migrations, bad IPC channel wiring, preload errors | Boots the actual app under `xvfb` with `--smoke`, which exits 0 after DB open + migrations + window load, printing `SMOKE_OK`; any main-process throw fails the job |
+| `smoke` | Main-process crashes at boot: broken DB migrations, bad IPC channel wiring, preload errors — plus renderer exceptions | Boots the actual app under `xvfb` with `--smoke`, which walks every hash route (dashboard, graph, queue, cards, schedule, settings) watching the renderer console; any main-process throw or renderer console error fails the job, otherwise it prints `SMOKE_OK` and exits 0 |
 
 ### Unit test details (`npm test`)
 
@@ -87,6 +130,20 @@ Each job exists because of a specific failure mode this project has hit:
 - a short cross-module review is interleaved after a long focus block
 - no block is shorter than 25 minutes; all blocks fit inside the availability window
 - deadlines marked done stop influencing the plan
+
+**`test/srs.test.js`** — the SM-2 flashcard scheduler:
+- good ratings follow the 1d, 6d, then ease-multiplied ladder; easy adds an extra 1.3× and ease bonus
+- again resets reps, counts a lapse, drops ease, retries within the session; hard grows slowly with the ease floored at 1.3
+- intervals cap at a year; rating buttons preview human labels (10m/1d/7w/2mo)
+
+**`test/pomodoro.test.js`** — the pomodoro phase machine:
+- 25 active minutes complete a pomodoro and start a short break; every 4th earns the long break
+- work time never accumulates during a break; the wall-clock tick ends breaks on schedule
+- skip returns straight to work; custom work/break/cycle config is honored
+
+**`test/extract.test.js`** — the file-text extractor behind the AI type check:
+- markdown/text/html/notebook content comes out whitespace-normalized, tags stripped, capped at the excerpt limit
+- unsupported formats, missing files, and text-free (scanned) files report a reason instead of throwing
 
 **`test/ingest.test.js`** — the year_three indexer (runs against a throwaway temp folder):
 - known folders map to the right module codes (`computer vision` → COMP3007)
