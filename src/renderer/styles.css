@@ -337,9 +337,10 @@ dialog .row { margin-top: 11px; }
   display: flex; flex-direction: column; gap: 8px; align-content: stretch;
   border: none; border-radius: 0 0 10px 10px; background: transparent;
 }
-.slot-drop.over, .inbox-drop.over {
+.slot-drop.over, .inbox-drop.over, .about-drop.over {
   background: var(--c-teal-bg); outline: 1px dashed var(--c-teal); outline-offset: -4px;
 }
+.about-drop { border: 1px dashed var(--border); border-radius: var(--radius); padding: 6px; }
 .slot-hint { font-size: 11.5px; pointer-events: none; padding: 8px 4px; color: var(--text-muted); }
 .mat-card {
   background: var(--surface-1); border: 0.5px solid var(--border); border-radius: var(--radius);

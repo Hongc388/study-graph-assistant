@@ -905,19 +905,18 @@ async function renderModule(idStr) {
       </div>
     </div>
 
-    ${assessment || tips.length ? `<div class="panel">
+    <div class="panel" id="about-module">
+      <h3 style="margin-top:0">About this module — goals &amp; strategy</h3>
       ${assessment ? `<div class="muted mono">${esc(assessment.content)}</div>` : ''}
-      ${tips.length ? `<h3 style="margin-top:8px">Strategy (from strategy.md)</h3>
-        <ul style="margin-left:18px">${tips.map(t => `<li class="muted">${esc(t.content)}</li>`).join('')}</ul>` : ''}
-    </div>` : ''}
-
-    ${aboutMats.length ? `<div class="panel" id="about-module">
-      <h3 style="margin-top:0">About this module</h3>
-      <p class="muted" style="margin:0 0 8px">Course info — handbook, syllabus, welcome slides. Kept
-        separate from the study board so they don't mix with lectures. Double-click to open; drag one
-        onto the board if it's actually study material.</p>
-      <div class="row about-mats">${aboutMats.map(matChipHtml).join('')}</div>
-    </div>` : ''}
+      ${tips.length ? `<ul style="margin:6px 0 6px 18px">${tips.map(t => `<li class="muted">${esc(t.content)}</li>`).join('')}</ul>` : ''}
+      <p class="muted" style="margin:6px 0 8px">Course-info files live here (handbook, syllabus, welcome
+        slides …), separate from the study board. <b>Drag any file card in or out yourself</b> —
+        double-click opens it.</p>
+      <div class="row about-mats about-drop" id="about-drop" style="min-height:44px">
+        ${aboutMats.map(matChipHtml).join('')
+          || '<span class="muted slot-hint">Drag course-info files here from the board below</span>'}
+      </div>
+    </div>
 
     <div class="row" style="margin:8px 0">
       <input id="search" placeholder="Search materials in this module…" style="width:280px">
@@ -998,6 +997,24 @@ async function renderModule(idStr) {
         </div>`;
       }).join('') : '<p class="muted">No sections yet — add one (e.g. Support Vector Machine) then drag materials from the inbox.</p>'}
     </div>`;
+
+  // Drop a file card on the About panel → mark it course-info (type 'overview',
+  // off the study board). Manual and instant; no AI, no rename on disk.
+  const aboutZone = view.querySelector('#about-drop');
+  aboutZone.addEventListener('dragover', (e) => { e.preventDefault(); aboutZone.classList.add('over'); });
+  aboutZone.addEventListener('dragleave', (e) => {
+    if (!aboutZone.contains(e.relatedTarget)) aboutZone.classList.remove('over');
+  });
+  aboutZone.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    aboutZone.classList.remove('over');
+    const materialId = Number(e.dataTransfer.getData('text/material-id'));
+    const mat = materials.find(m => m.id === materialId);
+    if (!mat || mat.type === 'overview') return;
+    await api.materialsUpdate({ ...mat, type: 'overview', topic_id: null });
+    toastStatus(`${mat.title} → About this module`);
+    route();
+  });
 
   view.querySelector('#del-mod').addEventListener('click', async () => {
     if (confirm(`Delete module ${mod.code} and everything in it?`)) {

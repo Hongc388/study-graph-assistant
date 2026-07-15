@@ -72,6 +72,14 @@ test('course-info files sit in About this module, off the study board', async ()
   await expect(page.locator('.inbox-panel')).not.toContainText('Module handbook');
 });
 
+test('dragging a card into About marks it course-info by hand', async () => {
+  const card = page.locator('.inbox-panel .mat-card', { hasText: 'Lecture 01' });
+  await card.dragTo(page.locator('#about-drop'));
+  await expect(page.locator('#about-module .mat-card')).toHaveCount(2);
+  await expect(page.locator('#about-module')).toContainText('Lecture 01');
+  await expect(page.locator('.inbox-panel')).not.toContainText('Lecture 01');
+});
+
 test('pomodoro settings persist across navigation', async () => {
   await page.evaluate(() => { location.hash = '#/settings'; });
   await page.check('#pomo-on');
