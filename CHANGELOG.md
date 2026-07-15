@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com); versions follow
 ## [Unreleased]
 
 ### Added
+- Custom app icon (a learning-path graph mark), rendered from an SVG source
+  into the macOS `.icns` by `scripts/make-icns.sh`.
+- Study reminder notifications — deadlines (3 days / 1 day / on the day),
+  flashcards due, planned study blocks about to start, pomodoro done / break
+  over (when the window is in the background), and an evening streak-saver.
+  Per-category toggles in Settings; each reminder fires at most once; never
+  promotional.
 - Distributable builds via electron-builder (`npm run pack` / `npm run dist`);
   CI boots the packaged .app to catch asar/path regressions.
 - Playwright end-to-end tests driving real user flows against a throwaway

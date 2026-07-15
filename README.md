@@ -112,6 +112,21 @@ pomodoros trigger a break reminder (5 min short, 15 min long every 4th), are
 logged to the database, and the status bar shows the countdown, today's count
 and your day streak.
 
+## Notifications
+
+The app sends OS notifications about your own study data only — never news or
+promotions. Categories (each toggleable in Settings, each fires at most once):
+
+- **Deadlines** — 3 days out, 1 day out, and on the day.
+- **Flashcards due** — one morning reminder when reviews are waiting.
+- **Study blocks** — a nudge up to 10 minutes before a planned block starts.
+- **Pomodoro** — work done / break over, only while the window is unfocused.
+- **Streak protection** — one evening nudge before a ≥2-day streak breaks.
+
+The decision logic lives in `src/shared/reminders.js` (pure, unit-tested); the
+main process feeds it a database snapshot every minute and records what was
+sent, so restarts never repeat a notification.
+
 ## How readiness is computed
 
 Readiness (the per-topic bar) is **derived, never typed in**, from two signals:
