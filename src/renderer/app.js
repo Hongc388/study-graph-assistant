@@ -262,7 +262,10 @@ function scheduleIdleStop() {
 
 function syncTimerActivity() {
   if (!timer) return;
-  const active = TimerState.isTimerActive(timer, { previewFocused });
+  // A pending or running break freezes the material timer too: the overlay in
+  // the preview blocks reading, so that time must not count as study.
+  const onBreak = pomo && pomo.phase !== 'work';
+  const active = !onBreak && TimerState.isTimerActive(timer, { previewFocused });
   timer = TimerState.applyActivitySync(timer, active) || timer;
   if (active) clearIdleStop();
   else if (timer.paused) scheduleIdleStop();
@@ -360,6 +363,7 @@ document.addEventListener('visibilitychange', () => {
 api.onMaterialSessionEnd(() => stopTimer());
 api.onPreviewFocus(() => { previewFocused = true; syncTimerActivity(); });
 api.onPreviewBlur(() => { previewFocused = false; syncTimerActivity(); });
+api.onBreakChoice(({ accept }) => applyBreakChoice(accept));
 
 // ---------- pomodoro coach ----------
 // Rides on the material timer: only ACTIVE study time advances the work phase,
@@ -401,19 +405,35 @@ async function pomodoroHeartbeat() {
       if (r.events.includes('work-complete')) {
         await api.pomoLog({ material_id: timer?.materialId || null, work_min: pomo.cfg.workMin });
         pomoStats = await api.pomoStats();
-        const long = pomo.phase === 'long_break';
-        notifyUser(
-          `Pomodoro ${pomoStats.count} done 🍅`,
-          long ? `Take a long ${pomo.cfg.longBreakMin}-minute break — you earned it.`
-               : `Take a ${pomo.cfg.shortBreakMin}-minute break, then come back.`);
+        syncTimerActivity(); // break_pending freezes the material timer
+        const { long, min } = Pomodoro.earnedBreakMin(pomo);
+        if (timer?.mode === 'preview') {
+          // The overlay in the preview window asks; its answer arrives via
+          // onBreakChoice below. Just note the milestone here.
+          toastStatus(`Pomodoro ${pomoStats.count} done 🍅`);
+        } else {
+          // No preview open — ask with a native dialog on this window.
+          notifyUser(`Pomodoro ${pomoStats.count} done 🍅`,
+            `You earned a ${min}-minute ${long ? 'long ' : ''}break.`);
+          applyBreakChoice(await api.pomoAskBreak({ min, long }));
+        }
       }
     }
   }
   const t = Pomodoro.tick(pomo);
   pomo = t.pomo;
   if (t.events.includes('break-complete')) {
+    syncTimerActivity(); // resume the material timer
     notifyUser('Break over', 'Back to focused work — open your next material.');
   }
+  renderPomodoroDisplay();
+}
+
+// Yes/no to an earned break — from the preview overlay or the native dialog.
+function applyBreakChoice(accept) {
+  if (!pomo || pomo.phase !== 'break_pending') return;
+  pomo = accept ? Pomodoro.startBreak(pomo) : Pomodoro.skipBreak(pomo);
+  syncTimerActivity();
   renderPomodoroDisplay();
 }
 
@@ -428,11 +448,17 @@ function renderPomodoroDisplay() {
   if (pomo.phase === 'work') {
     const counting = timer && !timer.paused;
     el.innerHTML = `🍅 ${mm}:${ss} to break${counting ? '' : ' <span class="muted">(waiting for focus)</span>'} · ${pomoStats.count} today${streak}`;
+  } else if (pomo.phase === 'break_pending') {
+    const { min } = Pomodoro.earnedBreakMin(pomo);
+    el.innerHTML = `🍅 break earned — <a href="#" id="st-pomo-take">take ${min}m</a> · <a href="#" id="st-pomo-skip">skip</a>${streak}`;
+    el.querySelector('#st-pomo-take').onclick = (e) => { e.preventDefault(); applyBreakChoice(true); };
+    el.querySelector('#st-pomo-skip').onclick = (e) => { e.preventDefault(); applyBreakChoice(false); };
   } else {
     el.innerHTML = `☕ break ${mm}:${ss} <a href="#" id="st-pomo-skip">skip</a> · ${pomoStats.count} today${streak}`;
     el.querySelector('#st-pomo-skip').onclick = (e) => {
       e.preventDefault();
       pomo = Pomodoro.skipBreak(pomo);
+      syncTimerActivity(); // unfreeze the material timer
       renderPomodoroDisplay();
     };
   }

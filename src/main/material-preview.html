@@ -98,6 +98,28 @@
     }
     #timer-pill .dim { color: var(--text-muted); }
     #timer-pill .brk { color: var(--c-teal); font-weight: 600; }
+
+    /* Break overlay: offers the earned break, then freezes the window while
+       resting — it sits above everything and swallows all interaction. */
+    #break-overlay {
+      position: fixed; inset: 0; z-index: 100;
+      background: rgba(251, 250, 247, 0.82); backdrop-filter: blur(7px);
+      display: flex; align-items: center; justify-content: center;
+    }
+    #break-card {
+      background: var(--surface-1); border: 0.5px solid var(--border);
+      border-radius: var(--radius-card); padding: 28px 34px; text-align: center;
+      box-shadow: 0 8px 40px rgba(26,26,24,.14); max-width: 340px;
+    }
+    #break-title { font-size: 17px; font-weight: 700; color: var(--text-primary); }
+    #break-sub { margin-top: 8px; font-size: 13px; line-height: 1.5; }
+    #break-count {
+      margin-top: 14px; font-size: 40px; font-weight: 700; color: var(--c-teal);
+      font-variant-numeric: tabular-nums;
+    }
+    #break-actions { margin-top: 18px; display: flex; gap: 10px; justify-content: center; }
+    #break-yes { background: var(--c-teal) !important; color: #fff !important; border-color: var(--c-teal) !important; }
+    #break-actions button { padding: 7px 16px !important; font-size: 13px !important; }
     [hidden] { display: none !important; }
   </style>
 </head>
@@ -133,6 +155,17 @@
     </aside>
   </div>
   <div id="timer-pill" hidden></div>
+  <div id="break-overlay" hidden>
+    <div id="break-card">
+      <div id="break-title"></div>
+      <div id="break-sub"></div>
+      <div id="break-count" hidden></div>
+      <div id="break-actions" hidden>
+        <button id="break-yes" type="button"></button>
+        <button id="break-no" type="button">Keep working</button>
+      </div>
+    </div>
+  </div>
   <script src="../../node_modules/pdfjs-dist/legacy/build/pdf.min.js"></script>
   <script src="../renderer/graphview.js"></script>
   <script src="material-preview.js"></script>

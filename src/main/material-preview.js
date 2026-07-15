@@ -313,8 +313,48 @@
     pill.innerHTML = html;
   }
 
+  // ----- break overlay: offer the earned break, freeze while resting -----
+  let breakAnswered = false; // guards against double-clicks between state pushes
+
+  function renderBreakOverlay(p) {
+    const overlay = document.getElementById('break-overlay');
+    if (!p || p.phase === 'work') { overlay.hidden = true; breakAnswered = false; return; }
+    const pending = p.phase === 'break_pending';
+    const title = document.getElementById('break-title');
+    const sub = document.getElementById('break-sub');
+    const count = document.getElementById('break-count');
+    const actions = document.getElementById('break-actions');
+    overlay.hidden = false;
+    actions.hidden = !pending;
+    count.hidden = pending;
+    if (pending) {
+      title.textContent = 'Pomodoro done 🍅';
+      sub.textContent = `You earned a ${p.breakMin}-minute break. Step away from the screen?`;
+      const yes = document.getElementById('break-yes');
+      yes.textContent = `Take ${p.breakMin} min`;
+      yes.disabled = document.getElementById('break-no').disabled = breakAnswered;
+    } else {
+      title.textContent = '☕ On a break';
+      sub.textContent = 'The reading is frozen until the break ends.';
+      count.textContent = mmss(p.remainingMs);
+    }
+  }
+
   function initTimerPill() {
-    if (api().onTimer) api().onTimer(renderTimerPill);
+    if (!api().onTimer) return;
+    api().onTimer((state) => {
+      renderTimerPill(state);
+      renderBreakOverlay(state && state.pomo);
+    });
+    const answer = (accept) => {
+      if (breakAnswered) return;
+      breakAnswered = true;
+      document.getElementById('break-yes').disabled = true;
+      document.getElementById('break-no').disabled = true;
+      api().breakChoice(accept);
+    };
+    document.getElementById('break-yes').addEventListener('click', () => answer(true));
+    document.getElementById('break-no').addEventListener('click', () => answer(false));
   }
 
   async function boot() {

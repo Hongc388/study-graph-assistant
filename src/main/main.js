@@ -554,6 +554,24 @@ function registerIpc() {
         previewWin.webContents.send('preview:timer', state);
       }
     },
+    // Preview overlay's answer to "take the break?" — forward to the main
+    // window renderer, which owns the pomodoro state.
+    'preview:breakChoice': (_, accept) => {
+      sendToRenderer('pomo:break-choice', { accept: !!accept });
+    },
+    // "Take the break?" when no preview window is open — native dialog.
+    'pomo:askBreak': async (_, { min, long }) => {
+      const { response } = await dialog.showMessageBox(mainWin, {
+        type: 'question',
+        buttons: [`Take the ${min}-minute break`, 'Keep working'],
+        defaultId: 0,
+        cancelId: 1,
+        message: 'Pomodoro done 🍅',
+        detail: long ? `You earned the long break — ${min} minutes away from the screen.`
+                     : `A ${min}-minute break keeps the next interval sharp.`,
+      });
+      return response === 0;
+    },
     // OS notification for renderer events (pomodoro done / break over). Shown
     // only when the window is unfocused — in focus the in-app toast suffices.
     'notify:show': async (_, n) => {

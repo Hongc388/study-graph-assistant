@@ -20,7 +20,7 @@ const channels = [
   'settings:get', 'settings:set',
   'ai:status', 'ai:suggestTopics', 'ai:suggestEdges',
   'ai:classifyModule', 'ai:suggestNoteLinks', 'ai:feedback',
-  'log:renderer', 'log:reveal', 'notify:show', 'preview:timerPush',
+  'log:renderer', 'log:reveal', 'notify:show', 'preview:timerPush', 'pomo:askBreak',
   'db:export', 'db:import', 'app:info',
 ];
 
@@ -38,6 +38,7 @@ function onChannel(channel, cb) {
 }
 api.onMaterialSessionEnd = (cb) => onChannel('material:session-end', cb);
 api.onPreviewFocus = (cb) => onChannel('material:preview-focus', cb);
+api.onBreakChoice = (cb) => onChannel('pomo:break-choice', cb);
 api.onPreviewBlur = (cb) => onChannel('material:preview-blur', cb);
 api.onAiClassifyProgress = (cb) => onChannel('ai:classify-progress', cb);
 
