@@ -238,26 +238,6 @@ label { font-size: 11px; color: var(--text-muted); display: block; margin-bottom
   border-bottom: 0.5px solid var(--border); color: var(--text-secondary);
 }
 
-/* graph */
-#graph-svg {
-  width: 100%; height: calc(100vh - 150px); background: var(--surface-1);
-  border: 0.5px solid var(--border); border-radius: var(--radius-card);
-}
-.gnode { cursor: grab; }
-.gnode text { font-size: 10.5px; fill: var(--text-primary); pointer-events: none; }
-.gedge { stroke: #C8C5BA; stroke-width: 1.2; }
-.gedge.prereq { stroke: var(--c-teal); stroke-width: 1.7; marker-end: url(#arrow); }
-.gedge.cross_module { stroke: var(--c-coral); stroke-dasharray: 5 3; }
-.gedge.analogy { stroke: var(--c-purple); stroke-dasharray: 2 3; }
-.gedge.exam_cluster { stroke: var(--c-red); stroke-dasharray: 8 3; }
-.legend { font-size: 11.5px; color: var(--text-muted); display: flex; gap: 14px; margin: 8px 0; flex-wrap: wrap; }
-.legend span::before { content: "—— "; font-weight: 700; }
-.legend .l-prereq::before { color: var(--c-teal); }
-.legend .l-related::before { color: #C8C5BA; }
-.legend .l-cross::before { color: var(--c-coral); }
-.legend .l-analogy::before { color: var(--c-purple); }
-.legend .l-exam::before { color: var(--c-red); }
-
 /* segmented view switcher */
 .seg {
   display: inline-flex; border: 0.5px solid var(--border); border-radius: var(--radius); overflow: hidden;
@@ -472,29 +452,27 @@ dialog .row { margin-top: 11px; }
 .nedge { stroke: #C8C5BA; stroke-width: 1.2; }
 .nnode { cursor: pointer; }
 
-/* ---------- library universe (semantic-zoom map) ---------- */
-.uni-svg { cursor: default; }
-.uni-hit { cursor: pointer; }
+/* ---------- library universe (3D orbit map) ---------- */
+.uni-canvas {
+  width: 100%; height: calc(100vh - 210px); display: block; cursor: grab;
+  background: var(--surface-1); border: 0.5px solid var(--border); border-radius: var(--radius-card);
+}
+.uni-canvas.dragging { cursor: grabbing; }
 .uni-crumbbar { font-size: 12.5px; color: var(--text-primary); }
 .uni-crumbbar a.uni-crumb { color: var(--c-teal); text-decoration: none; font-weight: 600; }
 .uni-crumbbar a.uni-crumb:hover { text-decoration: underline; }
 .uni-crumbbar .uni-sep { color: var(--text-muted); }
-
-/* LOD: each zoom level reveals exactly one layer of names.
-   Labels fade rather than pop; font sizes are in world units, chosen to be
-   readable at the zoom level where their layer becomes visible. */
-.uni-svg .lbl-mod { font-size: 26px; font-weight: 700; }
-.uni-svg .lbl-mod-sub { font-size: 17px; font-weight: 400; }
-.uni-svg .lbl-topic { font-size: 8.5px; font-weight: 650; }
-.uni-svg .lbl-mat { font-size: 2.6px; }
-.uni-svg .lbl-mod, .uni-svg .lbl-topic, .uni-svg .lbl-mat {
-  transition: opacity .28s ease; pointer-events: none;
+.uni-controls { margin-top: 8px; gap: 14px; font-size: 12px; color: var(--text-muted); }
+.uni-ctl { display: inline-flex; align-items: center; gap: 5px; margin: 0; cursor: pointer; }
+.uni-ctl input { accent-color: var(--c-teal); margin: 0; }
+.uni-tip {
+  position: fixed; z-index: 60; pointer-events: none; opacity: 0;
+  transform: translate(-50%, -130%); white-space: nowrap;
+  background: var(--surface-1); border: 0.5px solid var(--border); border-radius: 6px;
+  padding: 5px 9px; font-size: 11.5px; color: var(--text-primary);
+  box-shadow: 0 4px 14px rgba(26, 26, 24, .12); transition: opacity .1s ease;
 }
-.uni-svg.lod0 .lbl-topic, .uni-svg.lod0 .lbl-mat { opacity: 0; }
-.uni-svg.lod1 .lbl-mod, .uni-svg.lod1 .lbl-mat { opacity: 0; }
-.uni-svg.lod2 .lbl-mod, .uni-svg.lod2 .lbl-topic { opacity: 0; }
-/* at planet level, only the entered cluster reveals its file names */
-.uni-svg.lod2 .uni-cluster:not(.active) .lbl-mat { opacity: 0; }
+.uni-tip .sub { color: var(--text-muted); }
 
 /* ---------- toasts ---------- */
 #toasts {

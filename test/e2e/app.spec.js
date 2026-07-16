@@ -136,31 +136,27 @@ test('the universe view zooms from galaxies to a material card', async () => {
     });
     location.hash = '#/graph';
   });
-  await expect(page.locator('.uni-svg')).toBeVisible();
+  await expect(page.locator('.uni-canvas')).toBeVisible();
   await expect(page.locator('#uni-crumb')).toContainText('Universe');
-  // module name is the only label at universe level
-  await expect(page.locator('.lbl-mod').first()).toContainText('COMP9999');
+  // the canvas has no per-node DOM, so drilling down goes through the
+  // window.__uni handle the view exposes for tests
+  await page.waitForFunction(() => window.__uni && window.__uni.galaxies.length > 0);
   // enter the galaxy → breadcrumb grows
   await page.evaluate(() => {
-    document.querySelector('.uni-galaxy .uni-hit')
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const g = window.__uni.galaxies[0];
+    window.__uni.goLevel(1, g);
   });
   await expect(page.locator('#uni-crumb')).toContainText('COMP9999');
   // enter the first topic cluster → material click opens the details card
   await page.evaluate(() => {
-    document.querySelector('.uni-cluster .uni-hit')
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  });
-  await page.evaluate(() => {
-    document.querySelector('.uni-cluster.active .uni-mat .uni-hit')
-      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    const g = window.__uni.galaxies[0];
+    const item = g.items.find(it => it.mats.length > 0);
+    window.__uni.goLevel(2, g, item);
+    window.__uni.openMaterial(item.mats[0]);
   });
   await expect(page.locator('#uni-panel')).toContainText('Open file');
-  // the classic links view is still reachable
-  await page.click('[data-gm="links"]');
+  // edge management lives in the universe header now
   await expect(page.locator('#add-edge')).toBeVisible();
-  await page.click('[data-gm="universe"]');
-  await expect(page.locator('.uni-svg')).toBeVisible();
   await page.evaluate(() => { location.hash = '#/settings'; }); // hand off to the next test
   await expect(page.locator('#rm-enabled')).toBeVisible();
 });

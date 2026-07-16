@@ -127,7 +127,7 @@ function bindSectionBoard() {
 const routes = {
   dashboard: renderDashboard,
   module: renderModule,       // #/module/<id>
-  graph: renderGraph_,
+  graph: renderUniverse_,
   queue: renderQueue,
   cards: renderCards,         // spaced-repetition flashcards
   schedule: renderSchedule,   // #/schedule/today | timeline | calendar | list
@@ -163,6 +163,9 @@ async function route() {
     a.classList.toggle('active', on);
   });
   if (name === 'module') currentModuleId = Number(arg);
+  // leaving the universe view must stop its rAF loop and window listeners
+  uniHandle?.destroy?.();
+  uniHandle = null;
   view.innerHTML = '<p class="muted">Loading…</p>';
   await fn(arg);
   refreshTree();
@@ -1415,55 +1418,78 @@ async function renderCards() {
   }));
 }
 
-// ---------- Graph ----------
-// Not one big map: module scope by default, focus mode for 1-hop questions,
-// sparse edges (prereq + related); cross-module stays a list until asked for.
-let graphScope = null;      // module id | 'all'
-let graphKinds = null;      // Set of visible edge kinds
-let graphFocus = null;      // topic id in focus mode (1-hop subgraph)
-let graphMode = null;       // 'universe' (semantic-zoom map) | 'links' (classic edges)
-
-// Shared header toggle for the two graph designs.
-function graphModeSeg() {
-  return `<div class="seg">
-    <button class="seg-btn ${graphMode === 'universe' ? 'on' : ''}" data-gm="universe">🌌 Universe</button>
-    <button class="seg-btn ${graphMode === 'links' ? 'on' : ''}" data-gm="links">⋈ Links</button>
-  </div>`;
-}
-function bindGraphModeSeg() {
-  view.querySelectorAll('[data-gm]').forEach(btn => btn.addEventListener('click', async () => {
-    if (graphMode === btn.dataset.gm) return;
-    graphMode = btn.dataset.gm;
-    await api.settingsSet('graph_mode', graphMode);
-    route();
-  }));
-}
-
-// The Universe: whole-library map with semantic zoom. Only what the current
-// zoom level needs is labeled — everything else is just density and proximity.
+// ---------- Graph: the Universe ----------
+// Whole-library 3D map. Drag orbits the camera, scroll zooms, clicking drills
+// module → topic → material; Esc backs out one level. Edges are not drawn —
+// they pull related things together during layout — but they're still managed
+// here (+ Link topics / AI suggestions / per-topic list with delete).
+let uniHandle = null; // controls returned by renderUniverse, for teardown
 async function renderUniverse_() {
   const [mods, allTopics, allEdges, materials] = await Promise.all([
     api.modulesList(), api.topicsList(), api.edgesList(), api.materialsList()]);
+  uniHandle?.destroy?.();
   view.innerHTML = `
     <div class="row" style="justify-content:space-between">
       <h2>Library Universe</h2>
-      ${graphModeSeg()}
+      <div class="row">
+        <button id="add-edge" class="primary">+ Link topics</button>
+        <button id="ai-edges">✨ Suggest links (AI)</button>
+      </div>
     </div>
     <div class="row" style="margin-bottom:8px">
       <span id="uni-crumb" class="uni-crumbbar"></span>
-      <span class="muted" style="margin-left:auto">click a galaxy to enter · click empty space to zoom out · closer = more related</span>
+      <span class="muted" style="margin-left:auto">drag to orbit · scroll to zoom · click to enter · esc to back out</span>
     </div>
-    <svg id="graph-svg" class="uni-svg"></svg>
+    <canvas id="uni-canvas" class="uni-canvas"></canvas>
+    <div class="row uni-controls">
+      <label class="uni-ctl"><input type="checkbox" id="uni-links"> parent links</label>
+      <label class="uni-ctl"><input type="checkbox" id="uni-motion" checked> idle motion</label>
+      <button class="small" id="uni-freeze">❄ freeze for capture</button>
+      <button class="small" id="uni-reset">reset view</button>
+      <span id="uni-msg" class="muted"></span>
+    </div>
+    <div id="uni-tip" class="uni-tip"></div>
     <div id="uni-panel"></div>`;
-  bindGraphModeSeg();
 
-  const svg = view.querySelector('#graph-svg');
+  const canvas = view.querySelector('#uni-canvas');
   const panel = view.querySelector('#uni-panel');
-  requestAnimationFrame(() => window.renderUniverse(svg,
+
+  // entering a topic shows its links (all kinds, incl. cross-module) — the
+  // only place edges are visible, since the map itself never draws them
+  function showTopicPanel(t) {
+    const mod = mods.find(m => m.id === t.module_id);
+    const related = allEdges
+      .filter(e => e.from_topic === t.id || e.to_topic === t.id)
+      .map(e => {
+        const otherName = e.from_topic === t.id ? e.to_name : e.from_name;
+        const otherMod = mods.find(m => m.id === (e.from_topic === t.id ? e.to_module : e.from_module));
+        const cross = otherMod && otherMod.id !== t.module_id;
+        return `<li>${esc(e.kind)} → <b>${esc(otherName)}</b>
+          ${cross ? `<span class="chip">${esc(otherMod.code)}</span>` : ''}
+          ${e.note ? `<span class="muted"> — ${esc(e.note)}</span>` : ''}
+          <button class="danger-ghost small del-edge" data-id="${e.id}">✕</button></li>`;
+      });
+    panel.innerHTML = `
+      <div class="panel" style="margin-top:10px">
+        <b>${esc(t.name)}</b> <span class="chip mono">${esc(mod?.code || '')}</span>
+        <span class="muted">mastery ${(t.mastery * 100).toFixed(0)}%</span>
+        <ul style="margin:6px 0 0 18px">${related.join('') || '<li class="muted">No links yet.</li>'}</ul>
+      </div>`;
+    panel.querySelectorAll('.del-edge').forEach(b => b.addEventListener('click', async () => {
+      await api.edgesDelete(Number(b.dataset.id)); route();
+    }));
+  }
+
+  requestAnimationFrame(() => {
+    uniHandle = window.renderUniverse(canvas,
     { mods, topics: allTopics, materials, edges: allEdges },
     {
       crumbEl: view.querySelector('#uni-crumb'),
-      onLevel: () => { panel.innerHTML = ''; },
+      tipEl: view.querySelector('#uni-tip'),
+      onLevel: (level, galaxy, item) => {
+        panel.innerHTML = '';
+        if (level === 2 && item?.t) showTopicPanel(item.t);
+      },
       onMaterial: (mat) => {
         const mod = mods.find(m => m.id === mat.module_id);
         const topic = allTopics.find(t => t.id === mat.topic_id);
@@ -1488,124 +1514,23 @@ async function renderUniverse_() {
           api.materialsOpen({ path: mat.path, materialId: mat.id }));
         panel.querySelector('#uni-close').addEventListener('click', () => { panel.innerHTML = ''; });
       },
-    }));
-}
-async function renderGraph_() {
-  if (graphMode === null) {
-    graphMode = (await api.settingsGet('graph_mode')) === 'links' ? 'links' : 'universe';
-  }
-  if (graphMode === 'universe') return renderUniverse_();
-  const [mods, allTopics, allEdges] = await Promise.all([
-    api.modulesList(), api.topicsList(), api.edgesList()]);
-  const colors = new Map(mods.map(m => [m.id, m.color]));
-  if (graphScope === null) {
-    const saved = await api.settingsGet('graph_scope');
-    graphScope = currentModuleId || (saved === 'all' ? 'all' : Number(saved) || mods[0]?.id || 'all');
-  }
-  if (graphKinds === null) {
-    graphKinds = new Set(JSON.parse(await api.settingsGet('graph_kinds') || '["prereq","related"]'));
-  }
+    });
 
-  // --- apply scope / focus / kind filters ---
-  const focusTopic = graphFocus && allTopics.find(t => t.id === graphFocus);
-  let topics, edges;
-  if (focusTopic) {
-    // focus mode: the topic + 1-hop neighbors, ALL edge kinds (that's the point)
-    const nbr = new Set([focusTopic.id]);
-    for (const e of allEdges) {
-      if (e.from_topic === focusTopic.id) nbr.add(e.to_topic);
-      if (e.to_topic === focusTopic.id) nbr.add(e.from_topic);
-    }
-    topics = allTopics.filter(t => nbr.has(t.id));
-    edges = allEdges.filter(e => e.from_topic === focusTopic.id || e.to_topic === focusTopic.id);
-  } else {
-    topics = graphScope === 'all' ? allTopics : allTopics.filter(t => t.module_id === graphScope);
-    const ids = new Set(topics.map(t => t.id));
-    edges = allEdges.filter(e => ids.has(e.from_topic) && ids.has(e.to_topic) && graphKinds.has(e.kind));
-  }
-
-  const KIND_LABELS = { prereq: 'prereq', related: 'related', cross_module: 'cross-module',
-    analogy: 'analogy', exam_cluster: 'exam-cluster' };
-  view.innerHTML = `
-    <div class="row" style="justify-content:space-between">
-      <h2>Topic Graph</h2>
-      <div class="row">
-        ${graphModeSeg()}
-        <button id="add-edge" class="primary">+ Link topics</button>
-        <button id="ai-edges">✨ Suggest links (AI)</button>
-      </div>
-    </div>
-    <div class="row" style="margin-bottom:8px">
-      <select id="g-scope" ${focusTopic ? 'disabled' : ''}>
-        ${mods.map(m => `<option value="${m.id}" ${graphScope === m.id ? 'selected' : ''}>${esc(m.code)} — ${esc(m.name)}</option>`).join('')}
-        <option value="all" ${graphScope === 'all' ? 'selected' : ''}>All modules (advanced)</option>
-      </select>
-      ${focusTopic
-        ? `<span class="tag tag-teal">focus: ${esc(focusTopic.name)}</span>
-           <button class="small" id="g-unfocus">✕ exit focus</button>
-           <span class="muted">showing 1-hop neighbors, all edge kinds</span>`
-        : ['prereq', 'related', 'cross_module', 'analogy', 'exam_cluster'].map(k =>
-            `<label style="display:inline-flex; align-items:center; gap:4px; margin:0; font-size:12px; color:var(--muted); cursor:pointer">
-              <input type="checkbox" class="g-kind" value="${k}" ${graphKinds.has(k) ? 'checked' : ''}>${KIND_LABELS[k]}</label>`).join('')}
-    </div>
-    <div class="legend">
-      <span class="l-prereq">prereq</span><span class="l-related">related</span>
-      <span class="l-cross">cross-module</span><span class="l-analogy">analogy</span>
-      <span class="l-exam">exam-cluster</span>
-      <span class="muted" style="margin-left:auto">node size = readiness · click node to focus · drag to move</span>
-    </div>
-    <svg id="graph-svg"></svg>
-    <div id="topic-panel"></div>
-    <p id="graph-msg" class="muted"></p>`;
-
-  bindGraphModeSeg();
-  view.querySelector('#g-scope').addEventListener('change', async (e) => {
-    graphScope = e.target.value === 'all' ? 'all' : Number(e.target.value);
-    graphFocus = null;
-    await api.settingsSet('graph_scope', String(graphScope));
-    route();
+    const linksChk = view.querySelector('#uni-links');
+    const motionChk = view.querySelector('#uni-motion');
+    const freezeBtn = view.querySelector('#uni-freeze');
+    linksChk.addEventListener('change', () => uniHandle.setLinks(linksChk.checked));
+    motionChk.addEventListener('change', () => uniHandle.setMotion(motionChk.checked));
+    freezeBtn.addEventListener('click', () => {
+      const frozen = freezeBtn.dataset.on !== '1';
+      freezeBtn.dataset.on = frozen ? '1' : '';
+      freezeBtn.textContent = frozen ? '▶ resume motion' : '❄ freeze for capture';
+      uniHandle.setFreeze(frozen);
+      motionChk.checked = !frozen;
+    });
+    view.querySelector('#uni-reset').addEventListener('click', () => uniHandle.reset());
+    window.__uni = uniHandle; // canvas has no DOM to click — E2E drives this handle
   });
-  view.querySelectorAll('.g-kind').forEach(cb => cb.addEventListener('change', async () => {
-    cb.checked ? graphKinds.add(cb.value) : graphKinds.delete(cb.value);
-    await api.settingsSet('graph_kinds', JSON.stringify([...graphKinds]));
-    route();
-  }));
-  view.querySelector('#g-unfocus')?.addEventListener('click', () => { graphFocus = null; route(); });
-
-  const svg = view.querySelector('#graph-svg');
-  requestAnimationFrame(() => window.renderGraph(svg, topics, edges, colors, (t) => {
-    if (graphFocus !== t.id) { graphFocus = t.id; route(); }
-    showTopicPanel(t);
-  }));
-  if (focusTopic) showTopicPanel(focusTopic);
-  if (!topics.length) view.querySelector('#graph-msg').textContent =
-    'No topics in this scope yet — pick another module or index the library.';
-
-  function showTopicPanel(t) {
-    const mod = mods.find(m => m.id === t.module_id);
-    // the panel always lists ALL links (incl. cross-module), even when not drawn
-    const related = allEdges
-      .filter(e => e.from_topic === t.id || e.to_topic === t.id)
-      .map(e => {
-        const otherName = e.from_topic === t.id ? e.to_name : e.from_name;
-        const otherMod = mods.find(m => m.id === (e.from_topic === t.id ? e.to_module : e.from_module));
-        const cross = otherMod && otherMod.id !== t.module_id;
-        return `<li>${esc(e.kind)} → <b>${esc(otherName)}</b>
-          ${cross ? `<span class="chip">${esc(otherMod.code)}</span>` : ''}
-          ${e.note ? `<span class="muted"> — ${esc(e.note)}</span>` : ''}
-          <button class="danger-ghost small del-edge" data-id="${e.id}">✕</button></li>`;
-      });
-    view.querySelector('#topic-panel').innerHTML = `
-      <div class="panel">
-        <b>${esc(t.name)}</b> <span class="chip mono">${esc(mod?.code || '')}</span>
-        <span class="muted">mastery ${(t.mastery * 100).toFixed(0)}%</span>
-        <p class="muted">${esc(t.summary)}</p>
-        <ul style="margin:6px 0 0 18px">${related.join('') || '<li class="muted">No links yet.</li>'}</ul>
-      </div>`;
-    view.querySelectorAll('.del-edge').forEach(b => b.addEventListener('click', async () => {
-      await api.edgesDelete(Number(b.dataset.id)); route();
-    }));
-  }
 
   const topicOptions = allTopics.map(t => ({
     value: t.id,
@@ -1627,7 +1552,7 @@ async function renderGraph_() {
   });
 
   view.querySelector('#ai-edges').addEventListener('click', async () => {
-    const msg = view.querySelector('#graph-msg');
+    const msg = view.querySelector('#uni-msg');
     msg.textContent = 'Asking local model for link suggestions…';
     const r = await api.aiSuggestEdges();
     if (!r.ok) { msg.textContent = r.error; return; }
