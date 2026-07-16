@@ -437,6 +437,15 @@ function registerIpc() {
       db.unlinkReadingNotes(id);
       return db.getReadingNoteGraph(materialId);
     },
+    'highlights:list': (_, materialId) => db.listHighlights(materialId),
+    'highlights:create': (_, h) => {
+      db.createHighlight(h);
+      return db.listHighlights(h.material_id);
+    },
+    'highlights:delete': (_, { id, materialId }) => {
+      db.deleteHighlight(id);
+      return db.listHighlights(materialId);
+    },
     'study:todayLog': (_, date) => db.listStudyToday(date || reminders.localDateStr(new Date())),
     'study:resume': (_, limit) => db.listResumeItems(Math.min(limit ?? 8, db.MAX_RECENT_ACCESS)),
     'study:recentAccessMax': () => db.MAX_RECENT_ACCESS,

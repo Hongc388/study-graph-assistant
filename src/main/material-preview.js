@@ -89,18 +89,44 @@
     const viewport = page.getViewport({ scale });
     const outputScale = window.devicePixelRatio || 1;
 
+    const pageBox = document.createElement('div');
+    pageBox.id = 'page-box';
+    pageBox.style.width = `${Math.floor(viewport.width)}px`;
+    pageBox.style.height = `${Math.floor(viewport.height)}px`;
+    wrap.appendChild(pageBox);
+
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { alpha: false });
     canvas.width = Math.floor(viewport.width * outputScale);
     canvas.height = Math.floor(viewport.height * outputScale);
     canvas.style.width = `${Math.floor(viewport.width)}px`;
     canvas.style.height = `${Math.floor(viewport.height)}px`;
-    wrap.appendChild(canvas);
+    pageBox.appendChild(canvas);
 
     const transform = outputScale !== 1
       ? [outputScale, 0, 0, outputScale, 0, 0]
       : null;
     await page.render({ canvasContext: ctx, viewport, transform }).promise;
+
+    // Highlight layer sits between the canvas and the selectable text layer.
+    const hlLayer = document.createElement('div');
+    hlLayer.id = 'hl-layer';
+    pageBox.appendChild(hlLayer);
+    drawHighlights();
+
+    // pdf.js text layer: invisible glyph-positioned spans that make the page
+    // selectable like real text. --scale-factor is required by pdf.js ≥3.
+    try {
+      const textLayer = document.createElement('div');
+      textLayer.className = 'textLayer';
+      textLayer.style.setProperty('--scale-factor', String(viewport.scale));
+      pageBox.appendChild(textLayer);
+      await globalThis.pdfjsLib.renderTextLayer({
+        textContentSource: await page.getTextContent(),
+        container: textLayer,
+        viewport,
+      }).promise;
+    } catch { /* scanned/image-only page — highlighting just won't trigger */ }
 
     if (startScroll && num === startPage) wrap.scrollTop = startScroll;
 
@@ -144,6 +170,146 @@
       await renderPdfPage(currentPage);
     };
     document.getElementById('pdf-wrap').addEventListener('scroll', debouncedSave);
+    await initHighlights();
+  }
+
+  // ---------- pdf highlights (select text, pick a color, it persists) ----------
+  let highlights = [];
+
+  const HL_COLORS = ['yellow', 'green', 'pink'];
+
+  function pageBoxEl() { return document.getElementById('page-box'); }
+
+  // Merge the per-span client rects of a selection into one rect per text line,
+  // so a sentence becomes a clean bar instead of stacked translucent fragments.
+  function mergeLineRects(rects) {
+    const rows = [];
+    for (const r of rects) {
+      const row = rows.find(x => Math.abs(x.y - r.y) < r.h * 0.5);
+      if (row) {
+        const right = Math.max(row.x + row.w, r.x + r.w);
+        row.x = Math.min(row.x, r.x);
+        row.w = right - row.x;
+        row.h = Math.max(row.h, r.h);
+      } else {
+        rows.push({ ...r });
+      }
+    }
+    return rows;
+  }
+
+  function selectionRects() {
+    const sel = window.getSelection();
+    const box = pageBoxEl();
+    if (!sel || sel.isCollapsed || !box || sel.rangeCount === 0) return null;
+    const bb = box.getBoundingClientRect();
+    const rects = [...sel.getRangeAt(0).getClientRects()]
+      .filter(r => r.width > 1 && r.height > 1)
+      .map(r => ({
+        x: (r.left - bb.left) / bb.width,
+        y: (r.top - bb.top) / bb.height,
+        w: r.width / bb.width,
+        h: r.height / bb.height,
+      }))
+      .filter(r => r.x > -0.01 && r.y > -0.01 && r.x < 1 && r.y < 1);
+    if (!rects.length) return null;
+    return { rects: mergeLineRects(rects), text: sel.toString() };
+  }
+
+  function drawHighlights() {
+    const layer = document.getElementById('hl-layer');
+    if (!layer) return;
+    layer.innerHTML = highlights
+      .filter(h => h.page === currentPage)
+      .map(h => {
+        let rects;
+        try { rects = JSON.parse(h.rects); } catch { return ''; }
+        return rects.map(r => `<div class="hl hl-${esc(h.color)}" style="left:${r.x * 100}%;top:${r.y * 100}%;width:${r.w * 100}%;height:${r.h * 100}%"></div>`).join('');
+      }).join('');
+  }
+
+  function hideHlPop() {
+    document.getElementById('hl-pop').hidden = true;
+  }
+
+  function showHlPop() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return hideHlPop();
+    const box = pageBoxEl();
+    if (!box || !box.contains(sel.anchorNode)) return hideHlPop();
+    const r = sel.getRangeAt(0).getBoundingClientRect();
+    if (r.width < 2) return hideHlPop();
+    const pop = document.getElementById('hl-pop');
+    pop.hidden = false;
+    pop.style.left = `${Math.max(8, Math.min(r.left + r.width / 2 - pop.offsetWidth / 2, window.innerWidth - pop.offsetWidth - 8))}px`;
+    pop.style.top = `${Math.max(8, r.top - pop.offsetHeight - 8)}px`;
+  }
+
+  async function saveHighlight(color) {
+    const got = selectionRects();
+    hideHlPop();
+    if (!got || !materialId) return;
+    highlights = await api().highlightsCreate({
+      material_id: materialId,
+      page: currentPage,
+      color,
+      text: got.text.replace(/\s+/g, ' ').trim().slice(0, 500),
+      rects: JSON.stringify(got.rects),
+    });
+    window.getSelection()?.removeAllRanges();
+    drawHighlights();
+    renderHlList();
+  }
+
+  function renderHlList() {
+    const head = document.getElementById('hl-head');
+    const list = document.getElementById('hl-list');
+    if (!head || !list) return;
+    head.hidden = highlights.length === 0;
+    list.hidden = highlights.length === 0;
+    list.innerHTML = highlights.map(h => `
+      <div class="hl-item" data-page="${h.page}">
+        <span class="hl-dot hl-${esc(h.color)}"></span>
+        <span class="hl-text">${esc(h.text || '(passage)')}</span>
+        <span class="hl-meta">p.${h.page}</span>
+        <button class="danger-ghost hl-del" data-id="${h.id}" type="button">✕</button>
+      </div>`).join('');
+    list.querySelectorAll('.hl-item').forEach(el => {
+      el.addEventListener('click', async (e) => {
+        if (e.target.classList.contains('hl-del')) return;
+        const p = Number(el.dataset.page);
+        if (p !== currentPage) { currentPage = p; await renderPdfPage(p); debouncedSave(); }
+      });
+    });
+    list.querySelectorAll('.hl-del').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        highlights = await api().highlightsDelete({ id: Number(btn.dataset.id), materialId });
+        drawHighlights();
+        renderHlList();
+      });
+    });
+  }
+
+  async function initHighlights() {
+    if (!materialId || !api().highlightsList) return;
+    highlights = await api().highlightsList(materialId);
+    drawHighlights();
+    renderHlList();
+    const pop = document.getElementById('hl-pop');
+    pop.innerHTML = HL_COLORS.map(c =>
+      `<button class="hl-swatch hl-${c}" data-color="${c}" type="button" title="Highlight ${c}"></button>`).join('');
+    pop.querySelectorAll('.hl-swatch').forEach(btn => {
+      // mousedown, not click — click fires after the selection has collapsed
+      btn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        saveHighlight(btn.dataset.color);
+      });
+    });
+    document.getElementById('pdf-wrap').addEventListener('mouseup', () => {
+      setTimeout(showHlPop, 0); // let the selection settle first
+    });
+    document.getElementById('pdf-wrap').addEventListener('scroll', hideHlPop, { passive: true });
   }
 
   async function openText() {

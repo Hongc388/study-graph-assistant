@@ -8,7 +8,7 @@ const Database = require('better-sqlite3');
 // on open means "this file is about to be migrated" — so the old file is
 // copied aside first. The database IS the user's study history; a botched
 // migration must never be able to destroy the only copy.
-const SCHEMA_VERSION = 2; // v2: module colors remapped to the lighter palette
+const SCHEMA_VERSION = 3; // v3: pdf text highlights; v2: lighter module colors
 const BACKUP_KEEP = 5; // rotating daily backups under userData/backups
 
 let db;
@@ -180,6 +180,15 @@ function migrate() {
     to_note INTEGER NOT NULL REFERENCES reading_notes(id) ON DELETE CASCADE,
     kind TEXT NOT NULL DEFAULT 'related',
     UNIQUE (from_note, to_note)
+  );
+  CREATE TABLE IF NOT EXISTS highlights (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    material_id INTEGER NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+    page INTEGER NOT NULL,
+    text TEXT DEFAULT '',
+    color TEXT NOT NULL DEFAULT 'yellow',
+    rects TEXT NOT NULL, -- JSON [{x,y,w,h}] as fractions of the page box, zoom-independent
+    created_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS cards (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -756,6 +765,15 @@ const getReadingNoteGraph = (materialId) => ({
   links: listReadingNoteLinks(materialId),
 });
 
+// ---------- pdf highlights (marked passages while reading) ----------
+const listHighlights = (materialId) =>
+  all('SELECT * FROM highlights WHERE material_id=? ORDER BY page, created_at, id', materialId);
+const createHighlight = (h) =>
+  run('INSERT INTO highlights (material_id, page, text, color, rects, created_at) VALUES (?,?,?,?,?,?)',
+    h.material_id, h.page, (h.text || '').trim(), h.color || 'yellow', h.rects,
+    new Date().toISOString()).lastInsertRowid;
+const deleteHighlight = (id) => run('DELETE FROM highlights WHERE id=?', id);
+
 // ---------- AI feedback log ----------
 // Every accepted/rejected AI suggestion is recorded. Recent entries go back
 // into future prompts as few-shot examples, and the log doubles as a training
@@ -871,6 +889,7 @@ module.exports = {
   applyIngest, listModuleNotes, setAboutNotes,
   listReadingNotes, listReadingNoteLinks, createReadingNote, updateReadingNote, deleteReadingNote,
   linkReadingNotes, unlinkReadingNotes, getReadingNoteGraph,
+  listHighlights, createHighlight, deleteHighlight,
   listCards, listDueCards, createCard, updateCard, deleteCard, reviewCard, cardCounts,
   logPomodoro, pomodoroStats,
   logAiFeedback, listAiFeedback,

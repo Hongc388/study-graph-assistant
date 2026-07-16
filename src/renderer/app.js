@@ -477,12 +477,22 @@ async function refreshStatus() {
   const next = blocks.find(b => b.status === 'planned' && b.end_min > nowMin);
   stNext.textContent = next ? `next: ${fmtMin(next.start_min)} ${next.topic_name}` : '';
 }
-let toastTimer;
+// Real toasts: transient cards that slide in bottom-right instead of hijacking
+// the status bar text. Click to dismiss; at most three stack at once.
 function toastStatus(msg) {
-  const el = document.getElementById('st-next');
+  const host = document.getElementById('toasts');
+  const el = document.createElement('div');
+  el.className = 'toast';
   el.textContent = msg;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(refreshStatus, 6000);
+  el.title = 'Dismiss';
+  el.addEventListener('click', () => el.remove());
+  host.appendChild(el);
+  while (host.children.length > 3) host.firstChild.remove();
+  setTimeout(() => {
+    if (!el.isConnected) return;
+    el.classList.add('leaving');
+    el.addEventListener('animationend', () => el.remove(), { once: true });
+  }, 4500);
 }
 
 // ---------- command palette (Cmd+K / Cmd+P) ----------

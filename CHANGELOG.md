@@ -14,6 +14,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com); versions follow
   the reading behind a countdown; declining continues the work uninterrupted.
 
 ### Added
+- PDF text highlighting: select any passage in the preview window and pick a
+  color (yellow / green / pink) from the floating picker. Highlights persist
+  per file, redraw at any zoom, and are listed in the side panel — click one
+  to jump to its page, ✕ to remove it.
+- Real toast notifications: transient cards that slide in at the bottom-right
+  (click to dismiss) instead of temporarily overwriting the status bar text.
+- Gentle motion across the app: buttons ease and press down, cards lift on
+  hover, dialogs and toasts animate in.
 - The focus/pomodoro timer now also shows inside the material preview window,
   where the actual reading happens.
 - "About this module" panel: course-info files (handbook, syllabus, welcome,

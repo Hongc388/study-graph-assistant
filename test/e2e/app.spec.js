@@ -97,6 +97,8 @@ test('notification preferences persist across navigation', async () => {
   await expect(page.locator('#rm-enabled')).toBeChecked(); // on by default
   await page.uncheck('#rm-streak');
   await page.click('#save-remind');
+  // saving surfaces a transient toast card, not a status-bar text swap
+  await expect(page.locator('#toasts .toast').last()).toContainText('notification settings saved');
   await page.evaluate(() => { location.hash = '#/dashboard'; });
   await expect(page.locator('#add-mod')).toBeVisible();
   await page.evaluate(() => { location.hash = '#/settings'; });

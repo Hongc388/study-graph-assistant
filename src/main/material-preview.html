@@ -24,7 +24,9 @@
     #toolbar button, #notes-panel button {
       background: var(--surface-1); color: var(--text-primary); border: 0.5px solid var(--border);
       border-radius: var(--radius); padding: 4px 10px; cursor: pointer; font-size: 12px;
+      transition: background .15s ease, border-color .15s ease, transform .06s ease;
     }
+    #toolbar button:active, #notes-panel button:active { transform: scale(.95); }
     #toolbar button:hover, #notes-panel button:hover { background: var(--surface-2); }
     #toolbar button:disabled { opacity: .4; cursor: default; }
     #page-info { margin-left: auto; color: var(--text-muted); font-variant-numeric: tabular-nums; }
@@ -49,7 +51,62 @@
     #md-view a { color: var(--c-teal); }
     #html-wrap { padding: 0; }
     #html-wrap iframe { width: 100%; height: 100%; border: 0; background: #fff; }
-    canvas { display: block; max-width: 100%; height: auto; box-shadow: 0 2px 16px rgba(26,26,24,.08); margin: 0 auto 12px; }
+    canvas { display: block; max-width: 100%; height: auto; box-shadow: 0 2px 16px rgba(26,26,24,.08); }
+
+    /* Page stack: canvas at the bottom, saved highlights above it, and the
+       invisible pdf.js text layer on top so the page selects like real text. */
+    #page-box { position: relative; display: inline-block; margin: 0 auto 12px; text-align: left; }
+    .textLayer {
+      position: absolute; inset: 0; overflow: hidden; line-height: 1;
+      text-align: initial; transform-origin: 0 0; forced-color-adjust: none;
+    }
+    .textLayer span, .textLayer br {
+      color: transparent; position: absolute; white-space: pre; cursor: text;
+      transform-origin: 0% 0%;
+    }
+    .textLayer ::selection { background: rgba(14, 122, 99, .28); }
+    #hl-layer { position: absolute; inset: 0; pointer-events: none; }
+    #hl-layer .hl { position: absolute; border-radius: 2px; mix-blend-mode: multiply; }
+    .hl-yellow { background: rgba(255, 213, 79, .55); }
+    .hl-green { background: rgba(129, 199, 132, .50); }
+    .hl-pink { background: rgba(244, 143, 177, .50); }
+
+    /* Floating color picker that appears above a text selection. */
+    #hl-pop {
+      position: fixed; z-index: 60; display: flex; gap: 6px; padding: 6px 8px;
+      background: var(--surface-1); border: 0.5px solid var(--border);
+      border-radius: 999px; box-shadow: 0 6px 24px rgba(26,26,24,.14);
+      animation: pop-in .14s cubic-bezier(.2, .9, .3, 1.2);
+    }
+    @keyframes pop-in { from { opacity: 0; transform: translateY(4px) scale(.92); } }
+    .hl-swatch {
+      width: 20px; height: 20px; border-radius: 50%; padding: 0 !important;
+      border: 1.5px solid rgba(26,26,24,.15) !important; cursor: pointer;
+      transition: transform .1s ease;
+    }
+    .hl-swatch:hover { transform: scale(1.18); }
+    .hl-swatch.hl-yellow { background: #FFD54F !important; }
+    .hl-swatch.hl-green { background: #81C784 !important; }
+    .hl-swatch.hl-pink { background: #F48FB1 !important; }
+
+    /* Highlights list in the side panel. */
+    #hl-head {
+      font-size: 11px; font-weight: 700; color: var(--text-primary);
+      padding: 2px 2px 0; flex-shrink: 0;
+    }
+    #hl-list { max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+    .hl-item {
+      display: flex; align-items: center; gap: 6px; padding: 5px 7px; font-size: 11.5px;
+      background: var(--surface-0); border: 0.5px solid var(--border); border-radius: 7px;
+      cursor: pointer; color: var(--text-primary); transition: border-color .12s ease;
+    }
+    .hl-item:hover { border-color: var(--c-teal); }
+    .hl-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+    .hl-dot.hl-yellow { background: #FFD54F; }
+    .hl-dot.hl-green { background: #81C784; }
+    .hl-dot.hl-pink { background: #F48FB1; }
+    .hl-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hl-meta { color: var(--text-muted); font-size: 10px; flex: none; }
 
     #notes-panel {
       width: 300px; flex-shrink: 0; border-left: 0.5px solid var(--border);
@@ -146,6 +203,8 @@
         <button id="notes-toggle" type="button" title="Collapse">⟩</button>
       </div>
       <div class="notes-body">
+        <div id="hl-head" hidden>Highlights</div>
+        <div id="hl-list" hidden></div>
         <svg id="notes-graph"></svg>
         <div id="notes-hint">Type a concept while reading. Click two notes to link them.</div>
         <textarea id="note-input" placeholder="New note / concept… (Enter to add, Shift+Enter for newline)"></textarea>
@@ -155,6 +214,7 @@
     </aside>
   </div>
   <div id="timer-pill" hidden></div>
+  <div id="hl-pop" hidden></div>
   <div id="break-overlay" hidden>
     <div id="break-card">
       <div id="break-title"></div>
