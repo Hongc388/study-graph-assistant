@@ -472,6 +472,30 @@ dialog .row { margin-top: 11px; }
 .nedge { stroke: #C8C5BA; stroke-width: 1.2; }
 .nnode { cursor: pointer; }
 
+/* ---------- library universe (semantic-zoom map) ---------- */
+.uni-svg { cursor: default; }
+.uni-hit { cursor: pointer; }
+.uni-crumbbar { font-size: 12.5px; color: var(--text-primary); }
+.uni-crumbbar a.uni-crumb { color: var(--c-teal); text-decoration: none; font-weight: 600; }
+.uni-crumbbar a.uni-crumb:hover { text-decoration: underline; }
+.uni-crumbbar .uni-sep { color: var(--text-muted); }
+
+/* LOD: each zoom level reveals exactly one layer of names.
+   Labels fade rather than pop; font sizes are in world units, chosen to be
+   readable at the zoom level where their layer becomes visible. */
+.uni-svg .lbl-mod { font-size: 26px; font-weight: 700; }
+.uni-svg .lbl-mod-sub { font-size: 17px; font-weight: 400; }
+.uni-svg .lbl-topic { font-size: 8.5px; font-weight: 650; }
+.uni-svg .lbl-mat { font-size: 2.6px; }
+.uni-svg .lbl-mod, .uni-svg .lbl-topic, .uni-svg .lbl-mat {
+  transition: opacity .28s ease; pointer-events: none;
+}
+.uni-svg.lod0 .lbl-topic, .uni-svg.lod0 .lbl-mat { opacity: 0; }
+.uni-svg.lod1 .lbl-mod, .uni-svg.lod1 .lbl-mat { opacity: 0; }
+.uni-svg.lod2 .lbl-mod, .uni-svg.lod2 .lbl-topic { opacity: 0; }
+/* at planet level, only the entered cluster reveals its file names */
+.uni-svg.lod2 .uni-cluster:not(.active) .lbl-mat { opacity: 0; }
+
 /* ---------- toasts ---------- */
 #toasts {
   position: fixed; right: 16px; bottom: 40px; z-index: 90;

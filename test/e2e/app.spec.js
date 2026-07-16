@@ -125,6 +125,46 @@ test('clicking a calendar day opens its agenda and adds a deadline there', async
   await expect(page.locator('#rm-enabled')).toBeVisible();
 });
 
+test('the universe view zooms from galaxies to a material card', async () => {
+  await page.evaluate(async () => {
+    // the journey's other materials are course-info; the universe needs a study file
+    const mod = (await window.api.modulesList())[0];
+    const topic = (await window.api.topicsList(mod.id))[0];
+    await window.api.materialsCreate({
+      module_id: mod.id, topic_id: topic.id,
+      title: 'Lecture 02', path: '/x/lec02.pdf', type: 'lecture',
+    });
+    location.hash = '#/graph';
+  });
+  await expect(page.locator('.uni-svg')).toBeVisible();
+  await expect(page.locator('#uni-crumb')).toContainText('Universe');
+  // module name is the only label at universe level
+  await expect(page.locator('.lbl-mod').first()).toContainText('COMP9999');
+  // enter the galaxy → breadcrumb grows
+  await page.evaluate(() => {
+    document.querySelector('.uni-galaxy .uni-hit')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  await expect(page.locator('#uni-crumb')).toContainText('COMP9999');
+  // enter the first topic cluster → material click opens the details card
+  await page.evaluate(() => {
+    document.querySelector('.uni-cluster .uni-hit')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  await page.evaluate(() => {
+    document.querySelector('.uni-cluster.active .uni-mat .uni-hit')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  await expect(page.locator('#uni-panel')).toContainText('Open file');
+  // the classic links view is still reachable
+  await page.click('[data-gm="links"]');
+  await expect(page.locator('#add-edge')).toBeVisible();
+  await page.click('[data-gm="universe"]');
+  await expect(page.locator('.uni-svg')).toBeVisible();
+  await page.evaluate(() => { location.hash = '#/settings'; }); // hand off to the next test
+  await expect(page.locator('#rm-enabled')).toBeVisible();
+});
+
 test('settings shows the app version from package.json', async () => {
   const version = require('../../package.json').version;
   await expect(page.locator('#view')).toContainText(`Study Graph Assistant v${version}`);

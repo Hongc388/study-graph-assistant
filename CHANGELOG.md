@@ -14,6 +14,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com); versions follow
   the reading behind a countdown; declining continues the work uninterrupted.
 
 ### Added
+- Library Universe: the graph view is now a semantic-zoom map. Modules are
+  galaxies (only their names show from afar), clicking one zooms into its
+  topic clusters (names + file density, no file names yet), clicking a
+  cluster reveals the material "planets" by name, and clicking a planet
+  opens its details card with an Open button. No connection lines — related
+  things simply sit closer together. The classic edge-editing view lives
+  behind a "⋈ Links" toggle.
 - PDF text highlighting: select any passage in the preview window and pick a
   color (yellow / green / pink) from the floating picker. Highlights persist
   per file, redraw at any zoom, and are listed in the side panel — click one

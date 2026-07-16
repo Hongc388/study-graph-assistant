@@ -1421,7 +1421,80 @@ async function renderCards() {
 let graphScope = null;      // module id | 'all'
 let graphKinds = null;      // Set of visible edge kinds
 let graphFocus = null;      // topic id in focus mode (1-hop subgraph)
+let graphMode = null;       // 'universe' (semantic-zoom map) | 'links' (classic edges)
+
+// Shared header toggle for the two graph designs.
+function graphModeSeg() {
+  return `<div class="seg">
+    <button class="seg-btn ${graphMode === 'universe' ? 'on' : ''}" data-gm="universe">🌌 Universe</button>
+    <button class="seg-btn ${graphMode === 'links' ? 'on' : ''}" data-gm="links">⋈ Links</button>
+  </div>`;
+}
+function bindGraphModeSeg() {
+  view.querySelectorAll('[data-gm]').forEach(btn => btn.addEventListener('click', async () => {
+    if (graphMode === btn.dataset.gm) return;
+    graphMode = btn.dataset.gm;
+    await api.settingsSet('graph_mode', graphMode);
+    route();
+  }));
+}
+
+// The Universe: whole-library map with semantic zoom. Only what the current
+// zoom level needs is labeled — everything else is just density and proximity.
+async function renderUniverse_() {
+  const [mods, allTopics, allEdges, materials] = await Promise.all([
+    api.modulesList(), api.topicsList(), api.edgesList(), api.materialsList()]);
+  view.innerHTML = `
+    <div class="row" style="justify-content:space-between">
+      <h2>Library Universe</h2>
+      ${graphModeSeg()}
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <span id="uni-crumb" class="uni-crumbbar"></span>
+      <span class="muted" style="margin-left:auto">click a galaxy to enter · click empty space to zoom out · closer = more related</span>
+    </div>
+    <svg id="graph-svg" class="uni-svg"></svg>
+    <div id="uni-panel"></div>`;
+  bindGraphModeSeg();
+
+  const svg = view.querySelector('#graph-svg');
+  const panel = view.querySelector('#uni-panel');
+  requestAnimationFrame(() => window.renderUniverse(svg,
+    { mods, topics: allTopics, materials, edges: allEdges },
+    {
+      crumbEl: view.querySelector('#uni-crumb'),
+      onLevel: () => { panel.innerHTML = ''; },
+      onMaterial: (mat) => {
+        const mod = mods.find(m => m.id === mat.module_id);
+        const topic = allTopics.find(t => t.id === mat.topic_id);
+        panel.innerHTML = `
+          <div class="panel" style="margin-top:10px">
+            <div class="row" style="justify-content:space-between">
+              <div>
+                <b>${esc(mat.title)}</b>
+                <div class="muted" style="margin-top:3px">
+                  <span class="tag tag-teal">${esc(mat.type)}</span>
+                  ${mod ? esc(mod.code) : ''}${topic ? ` · ${esc(topic.name)}` : ' · unsorted'}
+                  ${mat.note_count ? ` · ${mat.note_count} note${mat.note_count === 1 ? '' : 's'}` : ''}
+                </div>
+              </div>
+              <div class="row">
+                ${mat.path ? `<button class="primary" id="uni-open">Open file</button>` : ''}
+                <button id="uni-close">✕</button>
+              </div>
+            </div>
+          </div>`;
+        panel.querySelector('#uni-open')?.addEventListener('click', () =>
+          api.materialsOpen({ path: mat.path, materialId: mat.id }));
+        panel.querySelector('#uni-close').addEventListener('click', () => { panel.innerHTML = ''; });
+      },
+    }));
+}
 async function renderGraph_() {
+  if (graphMode === null) {
+    graphMode = (await api.settingsGet('graph_mode')) === 'links' ? 'links' : 'universe';
+  }
+  if (graphMode === 'universe') return renderUniverse_();
   const [mods, allTopics, allEdges] = await Promise.all([
     api.modulesList(), api.topicsList(), api.edgesList()]);
   const colors = new Map(mods.map(m => [m.id, m.color]));
@@ -1457,6 +1530,7 @@ async function renderGraph_() {
     <div class="row" style="justify-content:space-between">
       <h2>Topic Graph</h2>
       <div class="row">
+        ${graphModeSeg()}
         <button id="add-edge" class="primary">+ Link topics</button>
         <button id="ai-edges">✨ Suggest links (AI)</button>
       </div>
@@ -1484,6 +1558,7 @@ async function renderGraph_() {
     <div id="topic-panel"></div>
     <p id="graph-msg" class="muted"></p>`;
 
+  bindGraphModeSeg();
   view.querySelector('#g-scope').addEventListener('change', async (e) => {
     graphScope = e.target.value === 'all' ? 'all' : Number(e.target.value);
     graphFocus = null;
