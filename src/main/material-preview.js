@@ -13,6 +13,7 @@
   let saving = false;
   let pdfZoom = 1;
   let preview = null;
+  let pdfCtx = null; // 2d context of the current page canvas — used by the wiped-canvas guard
 
   function api() {
     return preview || window.previewApi;
@@ -97,6 +98,7 @@
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { alpha: false });
+    pdfCtx = ctx;
     canvas.width = Math.floor(viewport.width * outputScale);
     canvas.height = Math.floor(viewport.height * outputScale);
     canvas.style.width = `${Math.floor(viewport.width)}px`;
@@ -136,6 +138,40 @@
     document.getElementById('next').disabled = num >= pdfDoc.numPages;
   }
 
+  // Chromium can discard a hidden or long-idle window's canvas backing store
+  // (macOS App Nap / GPU memory purge); the rendered page then comes back
+  // blank. Detect the wiped canvas and quietly repaint the current page.
+  function canvasWiped() {
+    if (!pdfCtx) return false;
+    const { width, height } = pdfCtx.canvas;
+    if (!width || !height) return true;
+    try {
+      for (const y of [0, Math.floor(height / 2), Math.max(0, height - 8)]) {
+        const d = pdfCtx.getImageData(0, y, width, Math.min(8, height)).data;
+        for (let i = 0; i < d.length; i += 4) {
+          if (d[i] || d[i + 1] || d[i + 2]) return false; // found a lit pixel
+        }
+      }
+      return true; // every sampled pixel is black — the backing store is gone
+    } catch { return false; }
+  }
+
+  let repainting = false;
+  async function repaintIfWiped() {
+    if (!pdfDoc || repainting || document.hidden || !canvasWiped()) return;
+    repainting = true;
+    try {
+      const wrap = document.getElementById('pdf-wrap');
+      const top = wrap.scrollTop;
+      const left = wrap.scrollLeft;
+      await renderPdfPage(currentPage);
+      wrap.scrollTop = top;
+      wrap.scrollLeft = left;
+    } finally {
+      repainting = false;
+    }
+  }
+
   async function openPdf() {
     document.getElementById('toolbar').hidden = false;
     document.getElementById('pdf-wrap').hidden = false;
@@ -171,6 +207,10 @@
     };
     document.getElementById('pdf-wrap').addEventListener('scroll', debouncedSave);
     await initHighlights();
+    // heal the page after the OS blanks the canvas behind our back
+    document.addEventListener('visibilitychange', repaintIfWiped);
+    window.addEventListener('focus', repaintIfWiped);
+    setInterval(repaintIfWiped, 20000);
   }
 
   // ---------- pdf highlights (select text, pick a color, it persists) ----------

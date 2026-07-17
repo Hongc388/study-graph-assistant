@@ -77,6 +77,9 @@ function openMaterialPreview(filePath, materialId) {
       preload: path.join(__dirname, 'material-preview-preload.js'),
       contextIsolation: true,
       sandbox: false,
+      // keep the reader's timers alive while hidden so the wiped-canvas
+      // guard and the pomodoro pill don't stall in the background
+      backgroundThrottling: false,
     },
   });
 

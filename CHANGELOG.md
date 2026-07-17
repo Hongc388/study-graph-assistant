@@ -55,6 +55,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com); versions follow
 - Type checking of the main process and shared engines (`npm run typecheck`).
 
 ### Fixed
+- A PDF left open in the background for a while could come back blank — the
+  OS discards an idle window's canvas memory. The preview now detects the
+  wiped page and repaints it (keeping your scroll position), and the preview
+  window is no longer throttled while hidden.
 - Boot rendered the first view twice (explicit `route()` plus the `hashchange`
   event), attaching duplicate click handlers — dialogs could open doubled.
 
