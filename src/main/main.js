@@ -19,11 +19,9 @@ const userDataArg = process.argv.find(a => a.startsWith('--user-data='));
 if (userDataArg) app.setPath('userData', userDataArg.slice('--user-data='.length));
 
 const DEFAULT_ROOT = path.join(os.homedir(), 'Desktop', 'year_three');
-const SESSION_IDLE_MS = 15000;
 
 let mainWin = null;
 let previewWin = null;
-let sessionIdleTimer = null;
 let closingPreviewInternally = false;
 
 function escHtml(s) {
@@ -33,18 +31,6 @@ function escHtml(s) {
 
 function sendToRenderer(channel, payload) {
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(channel, payload);
-}
-
-function clearSessionIdleTimer() {
-  if (sessionIdleTimer) { clearTimeout(sessionIdleTimer); sessionIdleTimer = null; }
-}
-
-function scheduleSessionIdleStop(reason = 'idle') {
-  clearSessionIdleTimer();
-  sessionIdleTimer = setTimeout(() => {
-    sessionIdleTimer = null;
-    sendToRenderer('material:session-end', { reason });
-  }, SESSION_IDLE_MS);
 }
 
 function closePreviewWindow() {
@@ -85,12 +71,12 @@ function openMaterialPreview(filePath, materialId) {
 
   const bindPreviewEvents = () => {
     previewWin.on('focus', () => {
-      clearSessionIdleTimer();
       sendToRenderer('material:preview-focus');
     });
     previewWin.on('blur', () => {
+      // no idle timer here — the renderer owns idle policy (it flushes the
+      // session after a while but keeps the preview open)
       sendToRenderer('material:preview-blur');
-      scheduleSessionIdleStop('preview-idle');
     });
     previewWin.on('close', () => {
       if (previewWin && !previewWin.isDestroyed()) {
@@ -101,7 +87,6 @@ function openMaterialPreview(filePath, materialId) {
     });
     previewWin.on('closed', () => {
       previewWin = null;
-      clearSessionIdleTimer();
       if (!closingPreviewInternally) {
         sendToRenderer('material:session-end', { reason: 'preview-closed' });
       }
@@ -109,7 +94,6 @@ function openMaterialPreview(filePath, materialId) {
     });
     previewWin.once('ready-to-show', () => {
       previewWin.focus();
-      clearSessionIdleTimer();
       sendToRenderer('material:preview-focus');
     });
   };
