@@ -240,11 +240,12 @@ async function runIngest(root) {
 // ---------- material timer (time ledger) ----------
 // Opening a material starts a timer; it only counts while the file preview
 // window is focused — not while you're browsing the main app.
-const TIMER_IDLE_MS = 15000;
+const TIMER_IDLE_MS = 5 * 60000;
 let timer = null; // { materialId, title, mode, activeMs, lastTickMs, paused, tick }
 let mainFocused = document.hasFocus();
 let previewFocused = false;
 let idleStopTimer = null;
+let idleStopped = null; // session flushed on idle, file still open — resume on refocus
 
 function timerElapsedMs() {
   return TimerState.elapsedMs(timer);
@@ -260,7 +261,15 @@ function clearIdleStop() {
 
 function scheduleIdleStop() {
   clearIdleStop();
-  idleStopTimer = setTimeout(() => stopTimer(), TIMER_IDLE_MS);
+  idleStopTimer = setTimeout(() => idleStop(), TIMER_IDLE_MS);
+}
+
+// Idle long enough: flush the session to the ledger, but leave the preview
+// window open — closing the file under the reader reads as being kicked out.
+async function idleStop() {
+  if (!timer) return;
+  idleStopped = { materialId: timer.materialId, title: timer.title, mode: timer.mode };
+  await stopTimer(true, { keepPreview: true });
 }
 
 function syncTimerActivity() {
@@ -337,8 +346,9 @@ async function startTimer(materialId, title, mode = 'none') {
   syncTimerActivity();
 }
 
-async function stopTimer(silent = false) {
+async function stopTimer(silent = false, { keepPreview = false } = {}) {
   if (!timer) return;
+  if (!keepPreview) idleStopped = null;
   clearInterval(timer.tick);
   clearIdleStop();
   if (!timer.paused) timer.activeMs += Date.now() - timer.lastTickMs;
@@ -348,7 +358,7 @@ async function stopTimer(silent = false) {
   previewFocused = false;
   const el = document.getElementById('st-timer');
   el.hidden = true;
-  if (mode === 'preview') await api.materialsClosePreview();
+  if (mode === 'preview' && !keepPreview) await api.materialsClosePreview();
   if (minutes >= 1) {
     await api.sessionsCreate({ material_id: materialId, duration_min: minutes, source: 'timer' });
     if (!silent) toastStatus(`logged ${minutes}m on ${title.slice(0, 30)}`);
@@ -363,8 +373,18 @@ document.addEventListener('visibilitychange', () => {
   mainFocused = !document.hidden && document.hasFocus();
   if (timer?.mode !== 'preview') syncTimerActivity();
 });
-api.onMaterialSessionEnd(() => stopTimer());
-api.onPreviewFocus(() => { previewFocused = true; syncTimerActivity(); });
+api.onMaterialSessionEnd(() => { idleStopped = null; stopTimer(); });
+api.onPreviewFocus(() => {
+  previewFocused = true;
+  if (!timer && idleStopped) {
+    // coming back after an idle flush — pick up a fresh session on the same file
+    const r = idleStopped;
+    idleStopped = null;
+    startTimer(r.materialId, r.title, r.mode);
+    return;
+  }
+  syncTimerActivity();
+});
 api.onPreviewBlur(() => { previewFocused = false; syncTimerActivity(); });
 api.onBreakChoice(({ accept }) => applyBreakChoice(accept));
 

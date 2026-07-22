@@ -161,6 +161,13 @@ test('the universe view zooms from galaxies to a material card', async () => {
   await expect(page.locator('#rm-enabled')).toBeVisible();
 });
 
+test('the reading-notes graph renderer is loaded', async () => {
+  // regression: retiring graphview.js once took renderNotesGraph with it,
+  // silently blanking the notes dialog's graph
+  const ok = await page.evaluate(() => typeof window.renderNotesGraph === 'function');
+  expect(ok).toBe(true);
+});
+
 test('settings shows the app version from package.json', async () => {
   const version = require('../../package.json').version;
   await expect(page.locator('#view')).toContainText(`Study Graph Assistant v${version}`);
