@@ -7,6 +7,9 @@
   const ext = (params.get('ext') || '').toLowerCase();
   const startPage = Math.max(1, Number(params.get('page') || 1));
   const startScroll = Math.max(0, Number(params.get('scroll') || 0));
+  // Reference mode: an untimed side-window for cross-checking another file.
+  // It must not fight the primary preview over reading progress.
+  const isRef = params.get('ref') === '1';
 
   let currentPage = startPage;
   let pdfDoc = null;
@@ -47,7 +50,7 @@
   }
 
   async function persistProgress() {
-    if (!materialId || saving) return;
+    if (isRef || !materialId || saving) return;
     saving = true;
     try {
       await api().saveProgress(progressPayload());
@@ -57,7 +60,7 @@
   }
 
   window.__savePreviewProgress = () => {
-    if (!materialId) return;
+    if (isRef || !materialId) return;
     api()?.saveProgressSync(progressPayload());
   };
 
@@ -575,7 +578,14 @@
       else if (ext === 'html') await openHtml();
       else await openText();
       await initNotesPanel();
-      initTimerPill();
+      if (isRef) {
+        const badge = document.createElement('span');
+        badge.id = 'ref-badge';
+        badge.textContent = 'reference — untimed';
+        document.getElementById('toolbar').prepend(badge);
+      } else {
+        initTimerPill();
+      }
     } catch (e) {
       document.body.textContent = `Preview error: ${e.message}`;
     }

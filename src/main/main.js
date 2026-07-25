@@ -40,6 +40,52 @@ function closePreviewWindow() {
   }
 }
 
+// Cross-reference windows: extra read-only previews that live alongside the
+// timed study preview. They never touch the timer, sessions, or reading
+// progress — open as many as the comparison needs.
+const refWins = new Set();
+
+function closeAllRefWindows() {
+  for (const w of refWins) { if (!w.isDestroyed()) w.close(); }
+  refWins.clear();
+}
+
+function openMaterialReference(filePath, materialId) {
+  if (!filePath || filePath.startsWith('http') || !fs.existsSync(filePath)) return { mode: 'none' };
+  if (!isPreviewable(filePath)) { shell.openPath(filePath); return { mode: 'external' }; }
+  const ext = path.extname(filePath).toLowerCase();
+  const mat = materialId ? db.getMaterial(materialId) : null;
+  const workerUrl = pathToFileURL(
+    path.join(__dirname, '../../node_modules/pdfjs-dist/legacy/build/pdf.worker.min.js')
+  ).href;
+  const win = new BrowserWindow({
+    width: 880,
+    height: 700,
+    title: `[ref] ${path.basename(filePath)}`,
+    webPreferences: {
+      preload: path.join(__dirname, 'material-preview-preload.js'),
+      contextIsolation: true,
+      sandbox: false,
+      backgroundThrottling: false,
+    },
+  });
+  refWins.add(win);
+  win.on('closed', () => refWins.delete(win));
+  win.loadFile(path.join(__dirname, 'material-preview.html'), {
+    query: {
+      file: filePath,
+      fileUrl: pathToFileURL(filePath).href,
+      materialId: String(materialId || ''),
+      ext: previewKind(ext),
+      page: String(mat?.last_page || 1),
+      scroll: String(mat?.last_scroll || 0),
+      worker: workerUrl,
+      ref: '1',
+    },
+  });
+  return { mode: 'reference' };
+}
+
 function previewKind(ext) {
   if (ext === '.pdf') return 'pdf';
   if (ext === '.html' || ext === '.htm') return 'html';
@@ -139,7 +185,7 @@ function createWindow() {
   mainWin.webContents.on('render-process-gone', (_, details) =>
     log.error('renderer.gone', `${details.reason} (exitCode ${details.exitCode})`));
   mainWin.on('unresponsive', () => log.warn('renderer', 'window unresponsive'));
-  mainWin.on('closed', () => { mainWin = null; closePreviewWindow(); });
+  mainWin.on('closed', () => { mainWin = null; closePreviewWindow(); closeAllRefWindows(); });
 }
 
 app.whenReady().then(() => {
@@ -390,6 +436,14 @@ function registerIpc() {
       return openMaterial(filePath, materialId);
     },
     'materials:closePreview': () => { closePreviewWindow(); },
+    // untimed side-window for cross-referencing while studying another file
+    'materials:openRef': (_, payload) => {
+      const filePath = typeof payload === 'string' ? payload : payload?.path;
+      const materialId = typeof payload === 'object' ? payload?.materialId : null;
+      return openMaterialReference(filePath, materialId);
+    },
+    // the whole sidebar tree in one round-trip (modules → topics → files + recents)
+    'library:tree': () => db.getLibraryTree(),
     'material:readPreviewFile': (_, filePath) => {
       const ext = path.extname(filePath).toLowerCase();
       return ext === '.pdf' ? fs.readFileSync(filePath) : fs.readFileSync(filePath, 'utf8');

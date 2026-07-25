@@ -271,6 +271,23 @@ function migrate() {
   for (const [from, to] of Object.entries(COLOR_REMAP)) {
     run('UPDATE modules SET color=? WHERE UPPER(color)=?', to, from);
   }
+  // Hot foreign keys: every list view filters or joins on these. Idempotent,
+  // so no schema-version bump is needed.
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_topics_module ON topics(module_id);
+    CREATE INDEX IF NOT EXISTS idx_materials_module ON materials(module_id);
+    CREATE INDEX IF NOT EXISTS idx_materials_topic ON materials(topic_id);
+    CREATE INDEX IF NOT EXISTS idx_reading_notes_material ON reading_notes(material_id);
+    CREATE INDEX IF NOT EXISTS idx_note_links_from ON reading_note_links(from_note);
+    CREATE INDEX IF NOT EXISTS idx_note_links_to ON reading_note_links(to_note);
+    CREATE INDEX IF NOT EXISTS idx_sessions_material ON material_sessions(material_id);
+    CREATE INDEX IF NOT EXISTS idx_highlights_material ON highlights(material_id);
+    CREATE INDEX IF NOT EXISTS idx_edges_from ON topic_edges(from_topic);
+    CREATE INDEX IF NOT EXISTS idx_edges_to ON topic_edges(to_topic);
+    CREATE INDEX IF NOT EXISTS idx_problems_topic ON problems(topic_id);
+    CREATE INDEX IF NOT EXISTS idx_deadlines_module ON deadlines(module_id);
+    CREATE INDEX IF NOT EXISTS idx_blocks_date ON study_blocks(date);
+  `);
 }
 
 // ---------- generic helpers ----------
@@ -409,6 +426,21 @@ const updateMaterial = (m) =>
     m.topic_id || null, m.path || '', m.type, m.title, m.due_at || null, m.id);
 const deleteMaterial = (id) => run('DELETE FROM materials WHERE id=?', id);
 const getMaterial = (id) => get('SELECT * FROM materials WHERE id=?', id);
+
+// One round-trip for the whole sidebar: modules → topic masters → file leaves,
+// pre-grouped here so the renderer never issues per-module follow-up queries.
+function getLibraryTree() {
+  const modules = all('SELECT id, code, name, color FROM modules ORDER BY code');
+  const topics = all(`SELECT t.id, t.module_id, t.name,
+      (SELECT MIN(m.seq) FROM materials m WHERE m.topic_id = t.id) AS first_seq
+    FROM topics t ORDER BY (first_seq IS NULL), first_seq, t.name`);
+  const materials = all(`SELECT id, module_id, topic_id, title, path, type, seq, last_opened_at
+    FROM materials ORDER BY (seq IS NULL), seq, title`);
+  const recent = all(`SELECT id, module_id, title, path, type FROM materials
+    WHERE last_opened_at IS NOT NULL ORDER BY last_opened_at DESC, id DESC LIMIT ?`,
+    MAX_RECENT_ACCESS);
+  return { modules, topics, materials, recent };
+}
 
 // Fixed-size access loop (LRU): only this many materials keep last_opened_at set.
 const MAX_RECENT_ACCESS = 12;
@@ -879,7 +911,7 @@ module.exports = {
   listModules, createModule, updateModule, deleteModule,
   listTopics, createTopic, updateTopic, deleteTopic, mergeTopics,
   listProblemQueue,
-  listMaterials, getMaterial, touchMaterialOpened, pruneRecentAccess, MAX_RECENT_ACCESS,
+  listMaterials, getMaterial, getLibraryTree, touchMaterialOpened, pruneRecentAccess, MAX_RECENT_ACCESS,
   saveMaterialProgress, createMaterial, updateMaterial, deleteMaterial, searchMaterials,
   listStudyToday, listResumeItems,
   listEdges, createEdge, deleteEdge,

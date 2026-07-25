@@ -7,6 +7,7 @@ const channels = [
   'topics:list', 'topics:create', 'topics:update', 'topics:delete', 'topics:merge',
   'materials:list', 'materials:create', 'materials:update', 'materials:delete', 'materials:organize',
   'materials:search', 'materials:pickFiles', 'materials:open', 'materials:closePreview', 'materials:touchOpen',
+  'materials:openRef', 'library:tree',
   'study:todayLog', 'study:resume', 'study:recentAccessMax',
   'notes:listReading', 'notes:createReading', 'notes:updateReading', 'notes:deleteReading',
   'notes:linkReading', 'notes:unlinkReading',

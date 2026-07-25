@@ -161,6 +161,30 @@ test('the universe view zooms from galaxies to a material card', async () => {
   await expect(page.locator('#rm-enabled')).toBeVisible();
 });
 
+test('the sidebar layers files under topic masters with a live filter', async () => {
+  // module row collapsed by default — expand it
+  await page.click('.tree-mod .twist');
+  // layer 1: the topic master created earlier in the journey
+  const topic = page.locator('.tree-topic', { hasText: 'Locator Strategies' });
+  await expect(topic).toBeVisible();
+  // course-info files get their own group instead of cluttering the topic layer
+  await expect(page.locator('.tree-topic', { hasText: 'Course info' })).toBeVisible();
+  // layer 2: files appear only when their topic is expanded
+  await topic.click();
+  const file = page.locator('.tree-file', { hasText: 'Lecture 02' });
+  await expect(file).toBeVisible();
+  await expect(file.locator('.ftag')).toHaveText('LEC');
+  // every file row carries the cross-reference affordance
+  await expect(file.locator('.ref-btn')).toHaveCount(1);
+  // the filter narrows across layers and reports empty results
+  await page.fill('#tree-filter', 'lecture 02');
+  await expect(page.locator('.tree-file', { hasText: 'Lecture 02' })).toBeVisible();
+  await page.fill('#tree-filter', 'zzz-no-such-file');
+  await expect(page.locator('#tree-nodes')).toContainText('No files match');
+  await page.fill('#tree-filter', '');
+  await expect(page.locator('.tree-mod', { hasText: 'COMP9999' })).toBeVisible();
+});
+
 test('the reading-notes graph renderer is loaded', async () => {
   // regression: retiring graphview.js once took renderNotesGraph with it,
   // silently blanking the notes dialog's graph

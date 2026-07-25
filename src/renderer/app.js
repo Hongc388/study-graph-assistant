@@ -80,6 +80,8 @@ function matChipHtml(m) {
         ${hint ? `<span>${esc(hint)}</span>` : '<span>Double-click to open</span>'}
         ${m.note_count ? `<button class="mat-notes" data-id="${m.id}" data-title="${esc(m.title)}"
           title="Review this file's notes graph">✎ ${m.note_count}</button>` : ''}
+        ${m.path ? `<button class="mat-ref" data-id="${m.id}" data-path="${esc(m.path)}"
+          title="Open beside current file (untimed reference)">⧉</button>` : ''}
       </div>
     </div>
   </div>`;
@@ -98,6 +100,11 @@ function bindSectionBoard() {
   view.querySelectorAll('.mat-notes').forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation();
     notesDialog(Number(b.dataset.id), b.dataset.title);
+  }));
+  view.querySelectorAll('.mat-ref').forEach(b => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    api.materialsTouchOpen(Number(b.dataset.id));
+    api.materialsOpenRef({ path: b.dataset.path, materialId: Number(b.dataset.id) });
   }));
   view.querySelectorAll('.slot-drop, .inbox-drop').forEach(zone => {
     zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('over'); });
@@ -176,44 +183,162 @@ document.querySelectorAll('.act').forEach(b =>
   b.addEventListener('click', () => location.hash = `#/${b.dataset.view}`));
 
 // ---------- sidebar file tree ----------
-const expanded = new Set();
+// Layered library: Recent (LRU) · Module → topic masters → file subbranches,
+// with Course info / Unsorted groups and a live filter. All data arrives in a
+// single library:tree IPC and is cached, so navigation never waits on the DB.
+const expandedMods = new Set(JSON.parse(localStorage.getItem('tree.mods') || '[]'));
+const expandedGroups = new Set(JSON.parse(localStorage.getItem('tree.groups') || '[]'));
+function saveTreeExpand() {
+  localStorage.setItem('tree.mods', JSON.stringify([...expandedMods]));
+  localStorage.setItem('tree.groups', JSON.stringify([...expandedGroups]));
+}
+const TYPE_TAG = {
+  lecture: 'LEC', assignment: 'ASG', 'exam-prep': 'EXM', paper: 'PAP',
+  lab: 'LAB', cheatsheet: 'CHT', notes: 'NTS', overview: 'INF',
+};
+let treeData = null;
+let treeFilter = '';
+
+function treeFileRow(f, lvl) {
+  return `<div class="tree-file lvl${lvl}" data-id="${f.id}" data-path="${esc(f.path)}" title="${esc(f.title)}">
+    <span class="ftag">${TYPE_TAG[f.type] || 'DOC'}</span>
+    <span class="fname">${esc(f.title)}</span>
+    <button class="ref-btn" title="Open beside current file (untimed reference)">⧉</button>
+  </div>`;
+}
+
+function treeGroupRow(key, label, count, open, lvl) {
+  return `<div class="tree-topic lvl${lvl}" data-key="${esc(key)}">
+    <span class="twist">${open ? '▾' : '▸'}</span>
+    <span class="tname">${esc(label)}</span><span class="count">${count}</span>
+  </div>`;
+}
+
+function renderTreeNodes() {
+  const box = document.getElementById('tree-nodes');
+  if (!box || !treeData) return;
+  const q = treeFilter.trim().toLowerCase();
+  const d = treeData;
+  const parts = [];
+  const matsByModule = new Map();
+  for (const f of d.materials) {
+    if (q && !f.title.toLowerCase().includes(q)) continue;
+    if (!matsByModule.has(f.module_id)) matsByModule.set(f.module_id, []);
+    matsByModule.get(f.module_id).push(f);
+  }
+  if (!q && d.recent.length) {
+    parts.push('<div class="tree-sec">Recent</div>');
+    for (const f of d.recent.slice(0, 6)) parts.push(treeFileRow(f, 1));
+  }
+  for (const m of d.modules) {
+    const mats = matsByModule.get(m.id) || [];
+    if (q && !mats.length) continue;
+    const open = q ? true : expandedMods.has(m.id);
+    const total = d.materials.filter(f => f.module_id === m.id).length;
+    parts.push(`<div class="tree-mod ${m.id === currentModuleId ? 'sel' : ''}" data-id="${m.id}">
+      <span class="twist">${open ? '▾' : '▸'}</span>
+      <span class="dot" style="background:${esc(m.color)}"></span>
+      <span>${esc(m.code)}</span><span class="count">${q ? mats.length : total}</span></div>`);
+    if (!open) continue;
+    if (q) { // filtering: flat matches under the module, no layer noise
+      for (const f of mats) parts.push(treeFileRow(f, 1));
+      continue;
+    }
+    const byTopic = new Map();
+    for (const f of mats) {
+      if (f.type === 'overview' || !f.topic_id) continue;
+      if (!byTopic.has(f.topic_id)) byTopic.set(f.topic_id, []);
+      byTopic.get(f.topic_id).push(f);
+    }
+    for (const t of d.topics.filter(t => t.module_id === m.id)) {
+      const files = byTopic.get(t.id) || [];
+      const key = `t${t.id}`;
+      const tOpen = expandedGroups.has(key);
+      parts.push(treeGroupRow(key, t.name, files.length, tOpen, 1));
+      if (tOpen) {
+        for (const f of files) parts.push(treeFileRow(f, 2));
+        if (!files.length) parts.push('<div class="tree-file lvl2 muted">— no files yet —</div>');
+      }
+    }
+    const groups = [
+      [`mu${m.id}`, 'Unsorted', mats.filter(f => !f.topic_id && f.type !== 'overview')],
+      [`mi${m.id}`, 'Course info', mats.filter(f => f.type === 'overview')],
+    ];
+    for (const [key, label, files] of groups) {
+      if (!files.length) continue;
+      const gOpen = expandedGroups.has(key);
+      parts.push(treeGroupRow(key, label, files.length, gOpen, 1));
+      if (gOpen) for (const f of files) parts.push(treeFileRow(f, 2));
+    }
+    if (!mats.length) parts.push('<div class="tree-file lvl1 muted">— empty —</div>');
+  }
+  box.innerHTML = parts.join('') || '<div class="tree-empty">No files match.</div>';
+}
+
+function ensureTreeScaffold(tree) {
+  if (document.getElementById('tree-nodes')) return;
+  tree.innerHTML = `<input id="tree-filter" placeholder="Filter files…" autocomplete="off">
+    <div id="tree-nodes"></div>`;
+  tree.querySelector('#tree-filter').addEventListener('input', (e) => {
+    treeFilter = e.target.value;
+    renderTreeNodes();
+  });
+  // one delegated listener instead of one per row — rows re-render constantly
+  tree.querySelector('#tree-nodes').addEventListener('click', (e) => {
+    const refBtn = e.target.closest('.ref-btn');
+    const file = e.target.closest('.tree-file');
+    if (refBtn && file) {
+      e.stopPropagation();
+      api.materialsTouchOpen(Number(file.dataset.id));
+      api.materialsOpenRef({ path: file.dataset.path, materialId: Number(file.dataset.id) });
+      return;
+    }
+    if (file && file.dataset.id) {
+      openMaterial(Number(file.dataset.id), file.title, file.dataset.path);
+      return;
+    }
+    const topic = e.target.closest('.tree-topic');
+    if (topic) {
+      const key = topic.dataset.key;
+      expandedGroups.has(key) ? expandedGroups.delete(key) : expandedGroups.add(key);
+      saveTreeExpand();
+      renderTreeNodes();
+      return;
+    }
+    const mod = e.target.closest('.tree-mod');
+    if (mod) {
+      const id = Number(mod.dataset.id);
+      if (e.target.closest('.twist')) {
+        expandedMods.has(id) ? expandedMods.delete(id) : expandedMods.add(id);
+        saveTreeExpand();
+        renderTreeNodes();
+      } else {
+        location.hash = `#/module/${id}`;
+      }
+    }
+  });
+}
+
 async function refreshTree() {
   const tree = document.getElementById('tree');
-  const mods = await api.modulesList();
-  if (!mods.length) {
+  // stale-while-revalidate: paint the cached tree instantly, then refetch
+  if (treeData?.modules.length) {
+    ensureTreeScaffold(tree);
+    renderTreeNodes();
+  }
+  const fresh = await api.libraryTree();
+  if (!fresh.modules.length) {
+    treeData = fresh;
     tree.innerHTML = `<div class="tree-empty">Library not indexed yet.</div>
       <button class="primary tree-cta" id="tree-index">Index year_three</button>`;
     tree.querySelector('#tree-index')?.addEventListener('click', runIngest);
     return;
   }
-  const parts = [];
-  for (const m of mods) {
-    const open = expanded.has(m.id);
-    parts.push(`<div class="tree-mod ${m.id === currentModuleId ? 'sel' : ''}" data-id="${m.id}">
-      <span class="twist">${open ? '▾' : '▸'}</span>
-      <span class="dot" style="background:${esc(m.color)}"></span>
-      <span>${esc(m.code)}</span><span class="count">${m.material_count}</span></div>`);
-    if (open) {
-      const mats = await api.materialsList(m.id);
-      for (const f of mats.slice(0, 80)) {
-        parts.push(`<div class="tree-file" data-path="${esc(f.path)}" data-id="${f.id}" title="${esc(f.title)}">${esc(f.title)}</div>`);
-      }
-      if (!mats.length) parts.push('<div class="tree-file muted">— empty —</div>');
-    }
+  if (JSON.stringify(fresh) !== JSON.stringify(treeData)) {
+    treeData = fresh;
   }
-  tree.innerHTML = parts.join('');
-  tree.querySelectorAll('.tree-mod').forEach(el => {
-    const id = Number(el.dataset.id);
-    el.querySelector('.twist').addEventListener('click', (e) => {
-      e.stopPropagation();
-      expanded.has(id) ? expanded.delete(id) : expanded.add(id);
-      refreshTree();
-    });
-    el.addEventListener('click', () => { location.hash = `#/module/${id}`; });
-  });
-  tree.querySelectorAll('.tree-file').forEach(el =>
-    el.addEventListener('click', () =>
-      openMaterial(Number(el.dataset.id), el.title, el.dataset.path)));
+  ensureTreeScaffold(tree);
+  renderTreeNodes();
 }
 document.getElementById('reindex').addEventListener('click', runIngest);
 
