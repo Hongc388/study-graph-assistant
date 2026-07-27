@@ -442,6 +442,19 @@ function getLibraryTree() {
   return { modules, topics, materials, recent };
 }
 
+/** One round-trip for the universe graph (canvas layout + panels). */
+function getUniverseGraph() {
+  return {
+    modules: listModules(),
+    topics: listTopics(),
+    materials: all(`SELECT m.id, m.module_id, m.topic_id, m.type, m.title, m.path,
+      (SELECT COUNT(*) FROM reading_notes rn WHERE rn.material_id = m.id) AS note_count
+      FROM materials m WHERE m.type != 'overview'
+      ORDER BY m.module_id, (m.seq IS NULL), m.seq, m.title`),
+    edges: listEdges(),
+  };
+}
+
 // Fixed-size access loop (LRU): only this many materials keep last_opened_at set.
 const MAX_RECENT_ACCESS = 12;
 
@@ -911,7 +924,7 @@ module.exports = {
   listModules, createModule, updateModule, deleteModule,
   listTopics, createTopic, updateTopic, deleteTopic, mergeTopics,
   listProblemQueue,
-  listMaterials, getMaterial, getLibraryTree, touchMaterialOpened, pruneRecentAccess, MAX_RECENT_ACCESS,
+  listMaterials, getMaterial, getLibraryTree, getUniverseGraph, touchMaterialOpened, pruneRecentAccess, MAX_RECENT_ACCESS,
   saveMaterialProgress, createMaterial, updateMaterial, deleteMaterial, searchMaterials,
   listStudyToday, listResumeItems,
   listEdges, createEdge, deleteEdge,

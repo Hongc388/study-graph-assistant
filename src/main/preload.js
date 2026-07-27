@@ -11,7 +11,8 @@ const channels = [
   'study:todayLog', 'study:resume', 'study:recentAccessMax',
   'notes:listReading', 'notes:createReading', 'notes:updateReading', 'notes:deleteReading',
   'notes:linkReading', 'notes:unlinkReading',
-  'ingest:run', 'ingest:defaultRoot', 'ingest:pickRoot', 'notes:list',
+  'ingest:run', 'ingest:start', 'ingest:status', 'ingest:defaultRoot', 'ingest:pickRoot',
+  'graph:universeData', 'notes:list',
   'problems:list', 'problems:create', 'problems:update', 'problems:delete', 'problems:queue', 'sessions:create',
   'edges:list', 'edges:create', 'edges:delete',
   'deadlines:list', 'deadlines:create', 'deadlines:update', 'deadlines:delete',
@@ -42,5 +43,8 @@ api.onPreviewFocus = (cb) => onChannel('material:preview-focus', cb);
 api.onBreakChoice = (cb) => onChannel('pomo:break-choice', cb);
 api.onPreviewBlur = (cb) => onChannel('material:preview-blur', cb);
 api.onAiClassifyProgress = (cb) => onChannel('ai:classify-progress', cb);
+api.onIngestProgress = (cb) => onChannel('ingest:progress', cb);
+api.onIngestDone = (cb) => onChannel('ingest:done', cb);
+api.onIngestError = (cb) => onChannel('ingest:error', cb);
 
 contextBridge.exposeInMainWorld('api', api);

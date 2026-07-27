@@ -342,23 +342,69 @@ async function refreshTree() {
 }
 document.getElementById('reindex').addEventListener('click', runIngest);
 
+let ingestInFlight = false;
+
+function setIngestUi(active, message) {
+  const el = document.getElementById('st-ingest');
+  const btn = document.getElementById('reindex');
+  if (el) {
+    el.hidden = !active;
+    el.textContent = message || '';
+  }
+  if (btn) btn.disabled = !!active;
+}
+
+function ingestResultToast(r) {
+  const bits = [`+${r.materials} files`, `+${r.topics} topics`];
+  if (r.modules) bits.unshift(`+${r.modules} modules`);
+  if (r.updated) bits.push(`${r.updated} changed`);
+  if (r.removed) bits.push(`${r.removed} removed`);
+  if (r.deadlines) bits.push(`${r.deadlines} exam deadline${r.deadlines > 1 ? 's' : ''} detected`);
+  if (r.spineEdges) bits.push(`${r.spineEdges} spine links`);
+  if (r.strategyParsed) bits.push('strategy.md parsed');
+  toastStatus(`Indexed ${r.root.split('/').pop()}: ${bits.join(', ')}`);
+}
+
+async function finishIngest(r) {
+  if (!r?.ok) return;
+  ingestInFlight = false;
+  setIngestUi(false);
+  await refreshTree();
+  ingestResultToast(r);
+  route();
+}
+
+function failIngest(e) {
+  ingestInFlight = false;
+  setIngestUi(false);
+  toastStatus(`Index failed: ${e?.message || 'unknown error'}`);
+}
+
+function onIngestProgress(p) {
+  const msg = p.total
+    ? `${p.message || 'Indexing…'} (${p.done}/${p.total})`
+    : (p.message || 'Indexing…');
+  setIngestUi(true, msg);
+}
+
 async function runIngest(root) {
-  const tree = document.getElementById('tree');
-  tree.innerHTML = '<div class="tree-empty">Indexing…</div>';
+  if (ingestInFlight) {
+    toastStatus('Index already running');
+    return;
+  }
+  ingestInFlight = true;
+  setIngestUi(true, 'Starting index…');
   try {
-    const r = await api.ingestRun(typeof root === 'string' ? root : undefined);
-    await refreshTree();
-    const bits = [`+${r.materials} files`, `+${r.topics} topics`];
-    if (r.modules) bits.unshift(`+${r.modules} modules`);
-    if (r.updated) bits.push(`${r.updated} changed`);
-    if (r.removed) bits.push(`${r.removed} removed`);
-    if (r.deadlines) bits.push(`${r.deadlines} exam deadline${r.deadlines > 1 ? 's' : ''} detected`);
-    if (r.spineEdges) bits.push(`${r.spineEdges} spine links`);
-    if (r.strategyParsed) bits.push('strategy.md parsed');
-    toastStatus(`Indexed ${r.root.split('/').pop()}: ${bits.join(', ')}`);
-    route();
+    const r = await api.ingestStart(typeof root === 'string' ? root : undefined);
+    if (!r.ok) {
+      ingestInFlight = false;
+      setIngestUi(false);
+      toastStatus(r.error || 'Could not start index');
+    }
   } catch (e) {
-    tree.innerHTML = `<div class="tree-empty error">${esc(e.message)}</div>`;
+    ingestInFlight = false;
+    setIngestUi(false);
+    toastStatus(e.message);
   }
 }
 
@@ -1570,8 +1616,6 @@ async function renderCards() {
 // here (+ Link topics / AI suggestions / per-topic list with delete).
 let uniHandle = null; // controls returned by renderUniverse, for teardown
 async function renderUniverse_() {
-  const [mods, allTopics, allEdges, materials] = await Promise.all([
-    api.modulesList(), api.topicsList(), api.edgesList(), api.materialsList()]);
   uniHandle?.destroy?.();
   view.innerHTML = `
     <div class="row" style="justify-content:space-between">
@@ -1591,13 +1635,18 @@ async function renderUniverse_() {
       <label class="uni-ctl"><input type="checkbox" id="uni-motion" checked> idle motion</label>
       <button class="small" id="uni-freeze">❄ freeze for capture</button>
       <button class="small" id="uni-reset">reset view</button>
-      <span id="uni-msg" class="muted"></span>
+      <span id="uni-msg" class="muted">Loading library map…</span>
     </div>
     <div id="uni-tip" class="uni-tip"></div>
     <div id="uni-panel"></div>`;
 
   const canvas = view.querySelector('#uni-canvas');
   const panel = view.querySelector('#uni-panel');
+  const msgEl = view.querySelector('#uni-msg');
+
+  const { modules: mods, topics: allTopics, materials, edges: allEdges } =
+    await api.graphUniverseData();
+  msgEl.textContent = '';
 
   // entering a topic shows its links (all kinds, incl. cross-module) — the
   // only place edges are visible, since the map itself never draws them
@@ -2419,6 +2468,9 @@ window.addEventListener('unhandledrejection', (e) =>
     badge.textContent = s.ok ? 'AI: local' : 'AI: offline';
     badge.classList.toggle('on', s.ok);
   });
+  api.onIngestProgress(onIngestProgress);
+  api.onIngestDone(finishIngest);
+  api.onIngestError(failIngest);
   initPomodoro();
   // Exactly one initial render: assigning a NEW hash fires hashchange (which
   // routes), so calling route() as well would double-render — the two async

@@ -201,6 +201,10 @@ Each job exists because of a specific failure mode this project has hit:
 To reproduce CI locally: `npm test` (unit), `npm start` (smoke, visible window),
 `ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e "require('better-sqlite3')"` (ABI).
 
+## Docs
+
+- [Performance & UX](docs/performance-ux.md) — journey budgets, perception targets, and release checklist for this app.
+
 ## Layout
 
 ```

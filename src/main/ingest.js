@@ -119,11 +119,15 @@ function scanModuleDir(dir) {
 }
 
 /** Scan the root. Returns { modules: [{folder, code, name, color, work, files:[...] , topicSuggestions:[...]}], strategyPath } */
-function scanRoot(root) {
+function scanRoot(root, opts = {}) {
   const out = { root, modules: [], strategyPath: null };
   let entries;
   try { entries = fs.readdirSync(root, { withFileTypes: true }); }
   catch (e) { throw new Error(`Cannot read ${root}: ${e.message}`); }
+
+  const moduleDirs = entries.filter(e =>
+    e.isDirectory() && !e.name.startsWith('.'));
+  const moduleTotal = moduleDirs.length;
 
   for (const e of entries) {
     if (e.isFile() && /strategy.*\.md$/i.test(e.name)) out.strategyPath = path.join(root, e.name);
@@ -152,6 +156,11 @@ function scanRoot(root) {
       Number(a.seq == null) - Number(b.seq == null) || (a.seq ?? 0) - (b.seq ?? 0));
     topicSuggestions = topicSuggestions.slice(0, MAX_TOPICS_PER_MODULE);
     out.modules.push({ folder: e.name, ...known, files, topicSuggestions });
+    opts.onModule?.({
+      folder: e.name,
+      done: out.modules.length,
+      total: moduleTotal,
+    });
   }
   return out;
 }

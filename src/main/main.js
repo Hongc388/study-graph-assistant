@@ -8,6 +8,7 @@ const { planDay } = require('./scheduler');
 const ai = require('./ai');
 const extract = require('./extract');
 const ingest = require('./ingest');
+const { executeIngest } = require('./ingest-job');
 const organize = require('./organize');
 const { isPreviewable } = require('./preview');
 const log = require('./log');
@@ -23,6 +24,39 @@ const DEFAULT_ROOT = path.join(os.homedir(), 'Desktop', 'year_three');
 let mainWin = null;
 let previewWin = null;
 let closingPreviewInternally = false;
+let ingestRunning = false;
+
+function ingestDeps(onProgress) {
+  return {
+    defaultRoot: DEFAULT_ROOT,
+    getSetting: db.getSetting,
+    setSetting: db.setSetting,
+    scanRoot: ingest.scanRoot,
+    parseStrategy: ingest.parseStrategy,
+    applyIngest: db.applyIngest,
+    onProgress,
+  };
+}
+
+function runIngestJob(sender, root) {
+  if (ingestRunning) return { ok: false, error: 'Index already running' };
+  ingestRunning = true;
+  const wc = sender;
+  const sendProgress = (payload) => {
+    if (wc && !wc.isDestroyed()) wc.send('ingest:progress', payload);
+  };
+  setImmediate(() => {
+    try {
+      const result = executeIngest({ ...ingestDeps(sendProgress), root });
+      if (wc && !wc.isDestroyed()) wc.send('ingest:done', { ok: true, ...result });
+    } catch (e) {
+      if (wc && !wc.isDestroyed()) wc.send('ingest:error', { message: e.message || String(e) });
+    } finally {
+      ingestRunning = false;
+    }
+  });
+  return { ok: true, started: true };
+}
 
 function escHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c =>
@@ -405,17 +439,10 @@ function registerIpc() {
       return db.listBlocks(date);
     },
     // ingest: scan the library root, upsert modules/materials/topics, parse strategy.md
-    'ingest:run': (_, root) => {
-      const libRoot = root || db.getSetting('library_root') || DEFAULT_ROOT;
-      const scan = ingest.scanRoot(libRoot);
-      let strategy = null;
-      if (scan.strategyPath) {
-        try { strategy = ingest.parseStrategy(scan.strategyPath); } catch { /* optional */ }
-      }
-      const stats = db.applyIngest(scan, strategy);
-      db.setSetting('library_root', libRoot);
-      return { root: libRoot, ...stats, strategyParsed: !!strategy };
-    },
+    'ingest:run': (_, root) => executeIngest({ ...ingestDeps(null), root }),
+    'ingest:start': (ev, root) => runIngestJob(ev.sender, root),
+    'ingest:status': () => ({ running: ingestRunning }),
+    'graph:universeData': () => db.getUniverseGraph(),
     'ingest:defaultRoot': () => db.getSetting('library_root') || DEFAULT_ROOT,
     'ingest:pickRoot': async () => {
       const r = await dialog.showOpenDialog({ properties: ['openDirectory'] });
