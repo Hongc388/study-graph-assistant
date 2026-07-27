@@ -198,7 +198,8 @@ Each job exists because of a specific failure mode this project has hit:
 - material classification: dated exam PDFs → `exam-prep`, problem sets → `assignment`, numbered lectures → `lecture`
 - strategy.md parsing extracts the module code, exam percentage (e.g. 80%), and per-step tips
 
-To reproduce CI locally: `npm test` (unit), `npm start` (smoke, visible window),
+To reproduce CI locally: `npm test` (unit), `npm run test:db` (SQLite tests via Electron’s Node),
+`npm start` (smoke, visible window),
 `ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e "require('better-sqlite3')"` (ABI).
 
 ## Docs

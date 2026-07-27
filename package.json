@@ -6,6 +6,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node test/run.js",
+    "test:db": "ELECTRON_RUN_AS_NODE=1 electron --test test/db-backup.test.js test/db-blocks.test.js test/db-cards.test.js test/db-highlights.test.js test/db-universe-graph.test.js",
     "typecheck": "tsc -p tsconfig.json",
     "test:e2e": "playwright test",
     "rebuild": "electron-rebuild -f -o better-sqlite3",

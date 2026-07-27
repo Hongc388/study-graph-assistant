@@ -3,14 +3,10 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { sqliteAvailable, SKIP_HINT } = require('./sqlite-available');
 
-let skipDb = false;
-let db;
-try {
-  db = require('../src/main/db');
-} catch {
-  skipDb = true;
-}
+const skipDb = !sqliteAvailable();
+const db = skipDb ? null : require('../src/main/db');
 
 const tmpDirs = [];
 
@@ -59,7 +55,7 @@ function seedLibrary({ modules = 3, topicsPerMod = 20, matsPerTopic = 8 } = {}) 
 }
 
 test('getUniverseGraph excludes overview materials and includes mastery on topics', (t) => {
-  if (skipDb) return t.skip('better-sqlite3 not built for this Node ABI');
+  if (skipDb) return t.skip(SKIP_HINT);
   openFreshDb();
   seedLibrary({ modules: 2, topicsPerMod: 2, matsPerTopic: 2 });
   const g = db.getUniverseGraph();
@@ -71,7 +67,7 @@ test('getUniverseGraph excludes overview materials and includes mastery on topic
 });
 
 test('getUniverseGraph meets stress-scale fetch budget', (t) => {
-  if (skipDb) return t.skip('better-sqlite3 not built for this Node ABI');
+  if (skipDb) return t.skip(SKIP_HINT);
   openFreshDb();
   seedLibrary({ modules: 5, topicsPerMod: 40, matsPerTopic: 10 });
   const t0 = performance.now();
